@@ -1,29 +1,50 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-from tradingview_ta import TA_Handler, Interval, Exchange
 import time
 
-# --- 1. 設定與清單 ---
-TICKERS = ['VOO', 'GOOG', 'V', 'NET', 'PANW', 'MSFT', 'ISRG', 'CEG', 'AAPL', 'TSM']
-st.set_page_config(page_title="Moat Hunter v12 (Pure Signal)", layout="wide")
-st.title("🛡️ Moat Hunter v12 (純訊號戰鬥版)")
-st.markdown("### 策略：宏觀環境 (Fed/VIX) + 企業體質 (P/E, Margin) + 恐慌進場")
+# --- 1. 設定頁面 ---
+st.set_page_config(page_title="Moat Hunter v13 (Dynamic)", layout="wide")
+st.title("🛡️ Moat Hunter v13 (動態輸入版)")
+st.markdown("### 策略：宏觀環境 + 企業體質 + 自訂監控")
 
-# --- 2. 獲取宏觀數據 (Macro Data) ---
+# --- 2. 初始化 Session State (記憶體) ---
+# 這是讓網頁「記住」你新增了哪些股票的關鍵
+if 'tickers' not in st.session_state:
+    st.session_state.tickers = ['VOO', 'GOOG', 'V', 'NET', 'PANW', 'MSFT', 'ISRG', 'CEG', 'AAPL', 'TSM']
+
+# --- 3. 側邊欄：新增/移除股票 ---
+st.sidebar.header("📝 管理監控名單")
+
+# 新增股票
+new_ticker = st.sidebar.text_input("輸入美股代號 (例如 NVDA):").upper()
+if st.sidebar.button("➕ 新增到清單"):
+    if new_ticker and new_ticker not in st.session_state.tickers:
+        st.session_state.tickers.append(new_ticker)
+        st.sidebar.success(f"已新增 {new_ticker}！")
+    elif new_ticker in st.session_state.tickers:
+        st.sidebar.warning("這支股票已經在清單裡了。")
+
+# 顯示目前清單 (可選移除)
+st.sidebar.markdown("---")
+st.sidebar.write(f"目前監控中 ({len(st.session_state.tickers)}):")
+ticker_to_remove = st.sidebar.selectbox("移除股票:", ["(選擇以移除)"] + st.session_state.tickers)
+if ticker_to_remove != "(選擇以移除)":
+    if st.sidebar.button("🗑️ 移除"):
+        st.session_state.tickers.remove(ticker_to_remove)
+        st.experimental_rerun() # 重新整理頁面
+
+# --- 4. 獲取宏觀數據 ---
 @st.cache_data(ttl=300)
 def get_macro_environment():
     try:
-        # A. 恐慌指數 (VIX)
         vix = yf.Ticker("^VIX").history(period="5d")['Close'].iloc[-1]
         
-        # B. 10年期公債殖利率 (^TNX) - 鷹派指標
         tnx = yf.Ticker("^TNX").history(period="5d")
         tnx_curr = tnx['Close'].iloc[-1]
         tnx_prev = tnx['Close'].iloc[-2]
         tnx_change = ((tnx_curr - tnx_prev) / tnx_prev) * 100 
         
-        # C. S&P 500 大盤
         sp500 = yf.Ticker("^GSPC").history(period="5d")
         sp_curr = sp500['Close'].iloc[-1]
         sp_prev = sp500['Close'].iloc[-2]
@@ -38,7 +59,7 @@ def get_macro_environment():
     except:
         return {"vix": 20, "tnx_yield": 4.0, "tnx_change": 0, "sp500_change": 0}
 
-# --- 3. 獲取個股數據 ---
+# --- 5. 獲取個股數據 ---
 def get_financial_health(stock):
     try:
         info = stock.info
@@ -56,53 +77,52 @@ def calculate_rsi(data, window=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi.iloc[-1]
 
-# --- 4. 核心評分邏輯 ---
+# --- 6. 核心評分邏輯 ---
 def calculate_sniper_score(rsi, margin, pe, change_pct, macro_data):
     score = 50 
     details = []
     
-    # A. 宏觀加分 (Macro)
+    # 宏觀 (Macro)
     if macro_data['tnx_change'] > 3.0:
         score += 15
-        details.append("🦅鷹派恐慌(+15)")
-    
+        details.append("🦅鷹派恐慌")
     if macro_data['sp500_change'] < -1.5:
         score += 20
-        details.append("📉大盤崩跌(+20)")
-        
+        details.append("📉大盤崩跌")
     if macro_data['vix'] > 30:
         score += 20
-        details.append("🩸極度恐慌VIX(+20)")
+        details.append("🩸極度恐慌VIX")
 
-    # B. 基本面 (Fundamental)
+    # 基本面 (Fundamental)
     if pe > 0 and pe < 25:
         score += 10
-        details.append("💰便宜PE(+10)")
+        details.append("💰便宜PE")
     elif pe > 50:
         score -= 15
-        details.append("💸太貴PE(-15)")
+        details.append("💸太貴PE")
 
     if margin > 50:
         score += 10
-        details.append("🏰高毛利(+10)")
+        details.append("🏰高毛利")
 
-    # C. 技術面 (Technical)
+    # 技術面 (Technical)
     if rsi < 30:
         score += 15
-        details.append("📉RSI超賣(+15)")
-    
+        details.append("📉RSI超賣")
     if change_pct < -2.0:
         score += 10
-        details.append("🔥單日大跌(+10)")
+        details.append("🔥單日大跌")
 
     return max(0, min(100, score)), " ".join(details)
 
-@st.cache_data(ttl=600, show_spinner=False)
 def get_market_data(tickers):
     macro = get_macro_environment()
     data_list = []
     
-    for ticker in tickers:
+    # 建立進度條
+    progress_bar = st.progress(0)
+    
+    for i, ticker in enumerate(tickers):
         try:
             stock = yf.Ticker(ticker)
             hist = stock.history(period="6mo")
@@ -130,49 +150,37 @@ def get_market_data(tickers):
                 })
             time.sleep(0.1)
         except Exception:
-            continue
+            pass # 抓不到就跳過
+        
+        # 更新進度條
+        progress_bar.progress((i + 1) / len(tickers))
             
     df = pd.DataFrame(data_list)
     if not df.empty:
         df = df.sort_values(by="Score", ascending=False)
     return df, macro
 
-# --- 5. 介面呈現 (極簡版) ---
+# --- 7. 主介面 ---
 
-# 側邊欄：宏觀數據
-st.sidebar.header("🌍 宏觀數據 (Macro)")
-if st.button('🚀 掃描市場訊號'):
-    with st.spinner('正在分析數據...'):
-        df, macro = get_market_data(TICKERS)
+if st.button('🚀 開始掃描清單'):
+    with st.spinner(f'正在分析 {len(st.session_state.tickers)} 支股票...'):
+        # 使用 session_state 裡的清單
+        df, macro = get_market_data(st.session_state.tickers)
         
-        # 顯示重點宏觀指標
-        st.sidebar.metric("VIX 恐慌指數", f"{macro['vix']:.2f}", 
-                          delta="極度恐慌" if macro['vix'] > 30 else "正常",
-                          delta_color="inverse")
-        
-        tnx_color = "normal" if macro['tnx_change'] > 0 else "inverse"
-        st.sidebar.metric("10年債 (鷹派指標)", f"{macro['tnx_yield']:.2f}%", 
-                          f"{macro['tnx_change']:.2f}%", delta_color=tnx_color)
-        
-        st.sidebar.metric("S&P 500 大盤", f"變動", f"{macro['sp500_change']:.2f}%")
+        # 顯示宏觀指標
+        col1, col2, col3 = st.columns(3)
+        col1.metric("VIX 恐慌指數", f"{macro['vix']:.2f}", delta="極度恐慌" if macro['vix'] > 30 else "正常", delta_color="inverse")
+        col2.metric("10年債 (鷹派)", f"{macro['tnx_yield']:.2f}%", f"{macro['tnx_change']:.2f}%", delta_color="inverse")
+        col3.metric("S&P 500", "變動", f"{macro['sp500_change']:.2f}%")
 
-        # 顯示主表格
         if not df.empty:
             def highlight_score(val):
-                if val >= 80: return 'background-color: #28a745; color: white' # 深綠
-                if val >= 60: return 'background-color: #d4edda; color: black' # 淺綠
+                if val >= 80: return 'background-color: #28a745; color: white'
+                if val >= 60: return 'background-color: #d4edda; color: black'
                 return ''
 
             st.dataframe(df.style.map(highlight_score, subset=['Score']))
-            
-            # 簡單說明
-            st.info("""
-            **評分邏輯 (最高100分)：**
-            * **>= 80分 (🟢 強力買進)**：宏觀恐慌 (VIX高/大盤跌) + 個股超跌/便宜。
-            * **>= 60分 (🟢 觀察買點)**：基本面優秀且價格合理。
-            * **其他**：太貴或時機未到。
-            """)
         else:
-            st.error("連線忙碌中。")
+            st.warning("沒有數據，請確認你的清單有股票。")
 else:
-    st.write("👈 請點擊按鈕開始掃描")
+    st.info(f"目前清單內有 {len(st.session_state.tickers)} 支股票，點擊按鈕開始掃描。")
