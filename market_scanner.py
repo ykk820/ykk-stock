@@ -3,184 +3,190 @@ import yfinance as yf
 import pandas as pd
 import time
 
-# --- 1. 設定頁面 ---
-st.set_page_config(page_title="Moat Hunter v13 (Dynamic)", layout="wide")
-st.title("🛡️ Moat Hunter v13 (動態輸入版)")
-st.markdown("### 策略：宏觀環境 + 企業體質 + 自訂監控")
+# --- 1. 設定與邏輯資料庫 ---
+st.set_page_config(page_title="Moat Hunter v14 (Trends)", layout="wide")
+st.title("🛡️ Moat Hunter v14 (趨勢邏輯版)")
+st.markdown("### 策略：透過「產業邏輯」尋找低估的龍頭股")
 
-# --- 2. 初始化 Session State (記憶體) ---
-# 這是讓網頁「記住」你新增了哪些股票的關鍵
-if 'tickers' not in st.session_state:
-    st.session_state.tickers = ['VOO', 'GOOG', 'V', 'NET', 'PANW', 'MSFT', 'ISRG', 'CEG', 'AAPL', 'TSM']
+# 這裡定義你的「邏輯鏈」
+# 只選 S&P 500 等級的非投機股
+TREND_THEMES = {
+    "🔥 自選監控名單": [], # 預留給使用者自訂
+    "⚡️ AI 的盡頭是電力 (核能/電網)": {
+        "logic": "AI 資料中心需要 24 小時穩定基載電力，核能與電網是最大受惠者。",
+        "tickers": ['CEG', 'VST', 'NEE', 'DUK', 'SO', 'ETR', 'CCJ'] 
+        # CEG/VST(核能), NEE/DUK(公用事業), CCJ(鈾礦龍頭)
+    },
+    "🧠 AI 基礎建設 (晶片/伺服器)": {
+        "logic": "AI 發展的第一階段，賣鏟子的硬體公司。",
+        "tickers": ['NVDA', 'TSM', 'AVGO', 'AMD', 'MSFT', 'GOOG', 'META']
+    },
+    "🛡️ 世界動盪 (國防/航太)": {
+        "logic": "地緣政治風險升高，各國增加國防預算。",
+        "tickers": ['LMT', 'RTX', 'NOC', 'GD', 'BA']
+        # LMT(洛歇馬丁), RTX(雷神), NOC(諾格)
+    },
+    "💊 減肥與高齡化 (生技/製藥)": {
+        "logic": "GLP-1 減肥藥需求與人口老化趨勢。",
+        "tickers": ['LLY', 'NVO', 'ISRG', 'UNH', 'JNJ', 'ABBV']
+        # LLY/NVO(減肥藥雙雄), ISRG(達文西手臂)
+    },
+    "🔒 數位保全 (資安)": {
+        "logic": "AI 帶來的攻擊增加，企業必須採購資安服務。",
+        "tickers": ['PANW', 'CRWD', 'NET', 'FTNT', 'PLTR']
+    }
+}
 
-# --- 3. 側邊欄：新增/移除股票 ---
-st.sidebar.header("📝 管理監控名單")
+# --- 2. 初始化 Session State ---
+if 'watchlist' not in st.session_state:
+    st.session_state.watchlist = ['VOO', 'AAPL'] # 預設
 
-# 新增股票
-new_ticker = st.sidebar.text_input("輸入美股代號 (例如 NVDA):").upper()
-if st.sidebar.button("➕ 新增到清單"):
-    if new_ticker and new_ticker not in st.session_state.tickers:
-        st.session_state.tickers.append(new_ticker)
-        st.sidebar.success(f"已新增 {new_ticker}！")
-    elif new_ticker in st.session_state.tickers:
-        st.sidebar.warning("這支股票已經在清單裡了。")
+# --- 3. 側邊欄控制 ---
+st.sidebar.header("🌍 選擇投資趨勢")
+selected_theme = st.sidebar.selectbox("你想押注哪個未來？", list(TREND_THEMES.keys()))
 
-# 顯示目前清單 (可選移除)
-st.sidebar.markdown("---")
-st.sidebar.write(f"目前監控中 ({len(st.session_state.tickers)}):")
-ticker_to_remove = st.sidebar.selectbox("移除股票:", ["(選擇以移除)"] + st.session_state.tickers)
-if ticker_to_remove != "(選擇以移除)":
-    if st.sidebar.button("🗑️ 移除"):
-        st.session_state.tickers.remove(ticker_to_remove)
-        st.experimental_rerun() # 重新整理頁面
+# 處理自選名單邏輯
+target_tickers = []
+theme_desc = ""
+
+if selected_theme == "🔥 自選監控名單":
+    st.sidebar.markdown("---")
+    new_ticker = st.sidebar.text_input("➕ 新增代號 (如 AMZN):").upper()
+    if st.sidebar.button("新增"):
+        if new_ticker and new_ticker not in st.session_state.watchlist:
+            st.session_state.watchlist.append(new_ticker)
+            
+    if st.session_state.watchlist:
+        remove_ticker = st.sidebar.selectbox("移除:", ["(選擇)"] + st.session_state.watchlist)
+        if remove_ticker != "(選擇)" and st.sidebar.button("刪除"):
+            st.session_state.watchlist.remove(remove_ticker)
+            st.experimental_rerun()
+            
+    target_tickers = st.session_state.watchlist
+    theme_desc = "你個人的觀察清單。"
+else:
+    # 載入預設趨勢股
+    target_tickers = TREND_THEMES[selected_theme]["tickers"]
+    theme_desc = TREND_THEMES[selected_theme]["logic"]
+    st.sidebar.info(f"💡 **邏輯：**\n{theme_desc}")
 
 # --- 4. 獲取宏觀數據 ---
 @st.cache_data(ttl=300)
 def get_macro_environment():
     try:
         vix = yf.Ticker("^VIX").history(period="5d")['Close'].iloc[-1]
-        
         tnx = yf.Ticker("^TNX").history(period="5d")
         tnx_curr = tnx['Close'].iloc[-1]
-        tnx_prev = tnx['Close'].iloc[-2]
-        tnx_change = ((tnx_curr - tnx_prev) / tnx_prev) * 100 
-        
+        tnx_change = ((tnx_curr - tnx['Close'].iloc[-2]) / tnx['Close'].iloc[-2]) * 100 
         sp500 = yf.Ticker("^GSPC").history(period="5d")
-        sp_curr = sp500['Close'].iloc[-1]
-        sp_prev = sp500['Close'].iloc[-2]
-        sp_change = ((sp_curr - sp_prev) / sp_prev) * 100
-        
-        return {
-            "vix": vix,
-            "tnx_yield": tnx_curr,
-            "tnx_change": tnx_change,
-            "sp500_change": sp_change
-        }
+        sp_change = ((sp500['Close'].iloc[-1] - sp500['Close'].iloc[-2]) / sp500['Close'].iloc[-2]) * 100
+        return {"vix": vix, "tnx_yield": tnx_curr, "tnx_change": tnx_change, "sp500_change": sp_change}
     except:
         return {"vix": 20, "tnx_yield": 4.0, "tnx_change": 0, "sp500_change": 0}
 
-# --- 5. 獲取個股數據 ---
-def get_financial_health(stock):
+# --- 5. 核心評分邏輯 (含 PEG 過濾投機股) ---
+def get_financials(stock):
     try:
         info = stock.info
-        gross_margin = info.get('grossMargins', 0) * 100
-        pe_ratio = info.get('trailingPE', 0)
-        return gross_margin, pe_ratio
+        # 抓 PEG (本益成長比)：用來過濾太貴或沒賺錢的投機股
+        peg = info.get('pegRatio', 0)
+        pe = info.get('trailingPE', 0)
+        margin = info.get('grossMargins', 0) * 100
+        return peg, pe, margin
     except:
-        return 0, 0
+        return 0, 0, 0
 
-def calculate_rsi(data, window=14):
-    delta = data['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi.iloc[-1]
-
-# --- 6. 核心評分邏輯 ---
-def calculate_sniper_score(rsi, margin, pe, change_pct, macro_data):
-    score = 50 
+def calculate_trend_score(rsi, peg, pe, margin, change, macro):
+    score = 50
     details = []
+
+    # A. 宏觀 (全體加分)
+    if macro['vix'] > 30: 
+        score += 20; details.append("🩸恐慌VIX")
+    if macro['tnx_change'] > 3.0: 
+        score += 15; details.append("🦅升息預期")
+    if macro['sp500_change'] < -1.5: 
+        score += 20; details.append("📉大盤崩跌")
+
+    # B. 價值過濾 (非投機)
+    # PEG < 1 代表成長價值被低估， > 3 代表炒作過頭
+    if peg > 0 and peg < 1.2:
+        score += 15; details.append("💎PEG低估")
+    elif peg > 3.5:
+        score -= 10; details.append("⚠️PEG過高")
     
-    # 宏觀 (Macro)
-    if macro_data['tnx_change'] > 3.0:
-        score += 15
-        details.append("🦅鷹派恐慌")
-    if macro_data['sp500_change'] < -1.5:
-        score += 20
-        details.append("📉大盤崩跌")
-    if macro_data['vix'] > 30:
-        score += 20
-        details.append("🩸極度恐慌VIX")
+    if pe > 0 and pe < 20:
+        score += 10; details.append("💰PE便宜")
 
-    # 基本面 (Fundamental)
-    if pe > 0 and pe < 25:
-        score += 10
-        details.append("💰便宜PE")
-    elif pe > 50:
-        score -= 15
-        details.append("💸太貴PE")
-
-    if margin > 50:
-        score += 10
-        details.append("🏰高毛利")
-
-    # 技術面 (Technical)
-    if rsi < 30:
-        score += 15
-        details.append("📉RSI超賣")
-    if change_pct < -2.0:
-        score += 10
-        details.append("🔥單日大跌")
+    # C. 技術面
+    if rsi < 35: score += 15; details.append("📉超賣")
+    if change < -2.0: score += 10; details.append("🔥大跌")
 
     return max(0, min(100, score)), " ".join(details)
 
 def get_market_data(tickers):
     macro = get_macro_environment()
     data_list = []
-    
-    # 建立進度條
-    progress_bar = st.progress(0)
+    progress = st.progress(0)
     
     for i, ticker in enumerate(tickers):
         try:
             stock = yf.Ticker(ticker)
             hist = stock.history(period="6mo")
-            
             if len(hist) > 14:
                 curr = hist['Close'].iloc[-1]
                 prev = hist['Close'].iloc[-2]
                 change = ((curr - prev) / prev) * 100
-                rsi = calculate_rsi(hist)
                 
-                if ticker == 'VOO':
-                    margin, pe = 0, 0
-                else:
-                    margin, pe = get_financial_health(stock)
+                # 計算 RSI
+                delta = hist['Close'].diff()
+                gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+                rs = gain / loss
+                rsi = 100 - (100 / (1 + rs))
+                rsi_val = rsi.iloc[-1]
 
-                final_score, reasons = calculate_sniper_score(rsi, margin, pe, change, macro)
+                peg, pe, margin = get_financials(stock)
+                
+                final_score, reasons = calculate_trend_score(rsi_val, peg, pe, margin, change, macro)
 
                 data_list.append({
-                    "Ticker": ticker,
-                    "Price": f"${curr:.2f}",
-                    "Score": int(final_score),
-                    "Change": f"{change:.2f}%",
-                    "P/E": f"{pe:.1f}" if pe > 0 else "-",
-                    "Reason": reasons
+                    "代號": ticker,
+                    "現價": f"${curr:.2f}",
+                    "分數": int(final_score),
+                    "漲跌幅": f"{change:.2f}%",
+                    "PEG": f"{peg:.2f}" if peg else "-",
+                    "P/E": f"{pe:.1f}" if pe else "-",
+                    "評分原因": reasons
                 })
             time.sleep(0.1)
-        except Exception:
-            pass # 抓不到就跳過
-        
-        # 更新進度條
-        progress_bar.progress((i + 1) / len(tickers))
-            
+        except: pass
+        progress.progress((i + 1) / len(tickers))
+    
     df = pd.DataFrame(data_list)
-    if not df.empty:
-        df = df.sort_values(by="Score", ascending=False)
+    if not df.empty: df = df.sort_values(by="分數", ascending=False)
     return df, macro
 
-# --- 7. 主介面 ---
+# --- 6. 介面 ---
+st.subheader(f"📊 目前趨勢：{selected_theme.split('(')[0]}")
+st.write(theme_desc)
 
-if st.button('🚀 開始掃描清單'):
-    with st.spinner(f'正在分析 {len(st.session_state.tickers)} 支股票...'):
-        # 使用 session_state 裡的清單
-        df, macro = get_market_data(st.session_state.tickers)
+if st.button('🚀 掃描此板塊'):
+    with st.spinner(f'正在分析 {len(target_tickers)} 支龍頭股...'):
+        df, macro = get_market_data(target_tickers)
         
-        # 顯示宏觀指標
-        col1, col2, col3 = st.columns(3)
-        col1.metric("VIX 恐慌指數", f"{macro['vix']:.2f}", delta="極度恐慌" if macro['vix'] > 30 else "正常", delta_color="inverse")
-        col2.metric("10年債 (鷹派)", f"{macro['tnx_yield']:.2f}%", f"{macro['tnx_change']:.2f}%", delta_color="inverse")
-        col3.metric("S&P 500", "變動", f"{macro['sp500_change']:.2f}%")
+        # 顯示宏觀
+        c1, c2, c3 = st.columns(3)
+        c1.metric("VIX 恐慌指數", f"{macro['vix']:.2f}", delta="極度恐慌" if macro['vix']>30 else "正常", delta_color="inverse")
+        c2.metric("10年債 (鷹派)", f"{macro['tnx_yield']:.2f}%", f"{macro['tnx_change']:.2f}%", delta_color="inverse")
+        c3.metric("標普500", "變動", f"{macro['sp500_change']:.2f}%")
 
         if not df.empty:
-            def highlight_score(val):
+            def highlight(val):
                 if val >= 80: return 'background-color: #28a745; color: white'
                 if val >= 60: return 'background-color: #d4edda; color: black'
                 return ''
-
-            st.dataframe(df.style.map(highlight_score, subset=['Score']))
+            st.dataframe(df.style.map(highlight, subset=['分數']))
+            st.info("💡 **PEG 指標：** 若 PEG < 1.2 (顯示為 PEG低估)，代表這家公司的獲利成長速度快於它的本益比，是非投機的好標的。")
         else:
-            st.warning("沒有數據，請確認你的清單有股票。")
-else:
-    st.info(f"目前清單內有 {len(st.session_state.tickers)} 支股票，點擊按鈕開始掃描。")
+            st.warning("請先新增自選股或等待數據下載。")
