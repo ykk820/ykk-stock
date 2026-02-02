@@ -3,123 +3,201 @@ import yfinance as yf
 import pandas as pd
 from tradingview_ta import TA_Handler, Interval, Exchange
 import streamlit.components.v1 as components
-from GoogleNews import GoogleNews
-from textblob import TextBlob
-import statistics
 import time
 
 # --- 1. 設定與清單 ---
 TICKERS = ['VOO', 'GOOG', 'V', 'NET', 'PANW', 'MSFT', 'ISRG', 'CEG', 'AAPL', 'TSM']
-st.set_page_config(page_title="Moat Hunter v7 (Anti-Block)", layout="wide")
-st.title("💎 Moat Hunter v7 (防封鎖穩定版)")
-st.markdown("### 策略核心：別人恐慌我貪婪 (快取優化模式)")
+st.set_page_config(page_title="Moat Hunter v11 (Macro)", layout="wide")
+st.title("🛡️ Moat Hunter v11 (宏觀狙擊版)")
+st.markdown("### 策略：監控 Fed 態度 (殖利率)、大盤災難與恐慌指數")
 
-# --- 2. 核心分析邏輯 (加上快取) ---
-
-# 設定 ttl=3600，代表這段 AI 分析會被記住 1 小時 (3600秒)
-# 這樣就不用每次都去 Google 搜尋，大幅降低被擋機率
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_contrarian_ai(ticker):
+# --- 2. 獲取宏觀數據 (Macro Data) ---
+@st.cache_data(ttl=300)
+def get_macro_environment():
     try:
-        # 1. 抓新聞
-        googlenews = GoogleNews(lang='en', region='US')
-        googlenews.set_period('3d') 
-        googlenews.search(f"{ticker} stock")
-        results = googlenews.results()
+        # A. 恐慌指數 (VIX)
+        vix = yf.Ticker("^VIX").history(period="5d")['Close'].iloc[-1]
         
-        if not results:
-            return "無重大消息", 0
-
-        # 2. 情感計算
-        scores = []
-        keywords = []
+        # B. 10年期公債殖利率 (^TNX) - 鷹派/鴿派 風向球
+        tnx = yf.Ticker("^TNX").history(period="5d")
+        tnx_curr = tnx['Close'].iloc[-1]
+        tnx_prev = tnx['Close'].iloc[-2]
+        tnx_change = ((tnx_curr - tnx_prev) / tnx_prev) * 100 # 殖利率變動百分比
         
-        for item in results[:5]: # 減少數量加快速度
-            title = item['title']
-            blob = TextBlob(title)
-            scores.append(blob.sentiment.polarity)
-            
-            t_lower = title.lower()
-            if "earnings" in t_lower: keywords.append("財報")
-            if "plunge" in t_lower or "drop" in t_lower: keywords.append("暴跌")
-            if "fed" in t_lower: keywords.append("升息/通膨")
-            if "lawsuit" in t_lower: keywords.append("訴訟")
-            if "hike" in t_lower: keywords.append("漲價")
-
-        avg_score = statistics.mean(scores) if scores else 0
-        reason = "、".join(list(set(keywords))) if keywords else "市場波動"
+        # C. 美股大盤 (S&P 500)
+        sp500 = yf.Ticker("^GSPC").history(period="5d")
+        sp_curr = sp500['Close'].iloc[-1]
+        sp_prev = sp500['Close'].iloc[-2]
+        sp_change = ((sp_curr - sp_prev) / sp_prev) * 100
         
-        if avg_score < -0.05:
-            return f"💎 恐慌買點 (原因: {reason})", avg_score
-        elif avg_score > 0.05:
-            return f"⚠️ 過熱風險 (原因: {reason})", avg_score
-        else:
-            return f"⚪ 觀望中 (原因: {reason})", avg_score
+        return {
+            "vix": vix,
+            "tnx_yield": tnx_curr,
+            "tnx_change": tnx_change,
+            "sp500_change": sp_change
+        }
+    except:
+        return {"vix": 20, "tnx_yield": 4.0, "tnx_change": 0, "sp500_change": 0}
 
-    except Exception:
-        return "暫無分析", 0
+# --- 3. 獲取個股數據 ---
+def get_financial_health(stock):
+    try:
+        info = stock.info
+        gross_margin = info.get('grossMargins', 0) * 100
+        pe_ratio = info.get('trailingPE', 0)
+        return gross_margin, pe_ratio
+    except:
+        return 0, 0
+
+def calculate_rsi(data, window=14):
+    delta = data['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.iloc[-1]
 
 def get_exchange(symbol):
     if symbol in ['VOO', 'V', 'NET', 'TSM']: return "NYSE"
     return "NASDAQ"
 
-# 設定 ttl=600，代表股價每 10 分鐘才更新一次
-# 這對價值投資者來說綽綽有餘，且能完美避開 Yahoo 封鎖
+# --- 4. 核心評分邏輯 (加入宏觀權重) ---
+def calculate_sniper_score(rsi, margin, pe, change_pct, macro_data):
+    score = 50 
+    details = []
+    
+    # --- A. 宏觀加分 (Macro Boost) ---
+    # 1. 鷹派衝擊 (Rates Shock): 殖利率單日大漲 > 3% -> 科技股殺盤 -> 機會
+    if macro_data['tnx_change'] > 3.0:
+        score += 15
+        details.append("🦅鷹派升息恐慌(+15)")
+    
+    # 2. 大盤崩跌 (Market Crash): S&P 500 大跌 > 1.5% -> 系統性買點
+    if macro_data['sp500_change'] < -1.5:
+        score += 20
+        details.append("📉大盤崩跌(+20)")
+        
+    # 3. 恐慌指數 (VIX)
+    if macro_data['vix'] > 30:
+        score += 20
+        details.append("🩸極度恐慌VIX(+20)")
+
+    # --- B. 個股素質 ---
+    # 估值 (P/E)
+    if pe > 0 and pe < 25:
+        score += 10
+        details.append("💰便宜(+10)")
+    elif pe > 50:
+        score -= 15
+        details.append("💸太貴(-15)")
+
+    # 護城河 (毛利)
+    if margin > 50:
+        score += 10
+        details.append("🏰高毛利(+10)")
+
+    # --- C. 技術面 ---
+    if rsi < 30:
+        score += 15
+        details.append("📉RSI超賣(+15)")
+    
+    if change_pct < -2.0:
+        score += 10
+        details.append("🔥單日大跌(+10)")
+
+    return max(0, min(100, score)), " ".join(details)
+
 @st.cache_data(ttl=600, show_spinner=False)
 def get_market_data(tickers):
+    # 1. 先抓宏觀環境
+    macro = get_macro_environment()
     data_list = []
     
     for ticker in tickers:
         try:
             stock = yf.Ticker(ticker)
-            # 加上錯誤處理，如果抓不到就跳過，不會讓整個網站掛掉
             hist = stock.history(period="6mo")
             
-            if len(hist) > 0:
+            if len(hist) > 14:
                 curr = hist['Close'].iloc[-1]
                 prev = hist['Close'].iloc[-2]
                 change = ((curr - prev) / prev) * 100
-                is_dip = change < -1.5
                 
-                # AI 分析 (現在會讀取快取)
-                ai_text, ai_score = get_contrarian_ai(ticker)
+                rsi = calculate_rsi(hist)
+                
+                if ticker == 'VOO':
+                    margin, pe = 0, 0
+                else:
+                    margin, pe = get_financial_health(stock)
+
+                # 2. 將宏觀數據傳入評分系統
+                final_score, reasons = calculate_sniper_score(rsi, margin, pe, change, macro)
 
                 data_list.append({
                     "Ticker": ticker,
                     "Price": f"${curr:.2f}",
-                    "Change %": change,
-                    "Strategy Signal": ai_text,
-                    "Is Dip?": "YES" if is_dip else "No"
+                    "Score": int(final_score),
+                    "Change": f"{change:.2f}%",
+                    "P/E": f"{pe:.1f}" if pe > 0 else "-",
+                    "Reason": reasons
                 })
-            time.sleep(0.1) # 稍微休息一下，對 API 溫柔一點
-            
-        except Exception as e:
-            # 如果這支股票抓不到，就先跳過，不要報錯
+            time.sleep(0.1)
+        except Exception:
             continue
             
-    return pd.DataFrame(data_list)
+    df = pd.DataFrame(data_list)
+    if not df.empty:
+        df = df.sort_values(by="Score", ascending=False)
+    return df, macro
 
-# --- 3. 介面 ---
-if st.button('🚀 掃描恐慌機會 (快取啟動)'):
-    with st.spinner('正在從快取或雲端讀取數據...'):
-        df = get_market_data(TICKERS)
+# --- 5. 介面呈現 ---
+
+# 側邊欄：宏觀儀表板
+st.sidebar.header("🌍 宏觀儀表板 (Macro)")
+if st.button('🚀 執行全域掃描'):
+    with st.spinner('正在分析 Fed 態度與大盤走勢...'):
+        df, macro = get_market_data(TICKERS)
         
+        # 顯示宏觀狀態
+        # A. VIX
+        st.sidebar.metric("VIX 恐慌指數", f"{macro['vix']:.2f}", 
+                          delta="極度恐慌" if macro['vix'] > 30 else "正常",
+                          delta_color="inverse") # 越高越紅
+        
+        # B. 10年債 (鷹派指標)
+        tnx_delta_color = "normal" if macro['tnx_change'] > 0 else "inverse" # 漲=紅(鷹派), 跌=綠(鴿派)
+        st.sidebar.metric("10年債殖利率 (鷹派指標)", f"{macro['tnx_yield']:.2f}%", 
+                          f"{macro['tnx_change']:.2f}%",
+                          delta_color=tnx_delta_color)
+        if macro['tnx_change'] > 2.0:
+            st.sidebar.error("🦅 殖利率飆升！鷹派衝擊！")
+
+        # C. S&P 500
+        st.sidebar.metric("S&P 500 大盤", f"變動", f"{macro['sp500_change']:.2f}%")
+        if macro['sp500_change'] < -1.5:
+            st.sidebar.success("📉 大盤崩跌中！全場特價！")
+
+        # 主畫面表格
         if not df.empty:
-            def highlight_strategy(row):
-                if "恐慌買點" in row['Strategy Signal']:
-                    return ['background-color: #d4edda; color: black'] * len(row)
-                elif "過熱風險" in row['Strategy Signal']:
-                    return ['background-color: #f8d7da; color: black'] * len(row)
-                else:
-                    return [''] * len(row)
+            def highlight_score(val):
+                if val >= 80: return 'background-color: #28a745; color: white'
+                if val >= 60: return 'background-color: #d4edda; color: black' 
+                return ''
 
-            st.dataframe(df.style.apply(highlight_strategy, axis=1))
+            st.dataframe(df.style.map(highlight_score, subset=['Score']))
+            st.markdown("""
+            ### 🦅 鷹派與崩跌訊號說明：
+            * **鷹派升息恐慌 (+15分)**：當 10 年債殖利率單日大漲，代表資金逃離債市，通常科技股會大跌。
+            * **大盤崩跌 (+20分)**：當 S&P 500 單日跌幅超過 1.5%，代表系統性風險，是撿好股的最佳時機。
+            """)
         else:
-            st.error("⚠️ Yahoo 目前暫時阻擋了連線，請過 10 分鐘後再試。")
+            st.error("無法取得數據，請稍後再試。")
+else:
+    st.info("請點擊左側按鈕開始掃描。")
 
-# --- 4. 詳細圖表 ---
+# --- 6. TradingView ---
 st.markdown("---")
-selected = st.selectbox("查看詳細圖表:", TICKERS)
+selected = st.selectbox("查看圖表:", TICKERS)
 tv_symbol = f"{get_exchange(selected)}:{selected}"
 components.html(f"""
 <div class="tradingview-widget-container">
