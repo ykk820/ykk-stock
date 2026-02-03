@@ -7,9 +7,9 @@ import openai
 import math
 import google.generativeai as genai
 
-st.set_page_config(page_title="🇺🇸 Moat Hunter (Auto AI)", layout="wide")
-st.title("🇺🇸 Moat Hunter (美股自動偵測版)")
-st.markdown("### 策略：巴菲特 (OpenAI) vs 伍德 (Gemini) + 升降息預測")
+st.set_page_config(page_title="🇺🇸 Moat Hunter (Final Fix)", layout="wide")
+st.title("🇺🇸 Moat Hunter (美股終極修復版)")
+st.markdown("### 策略：巴菲特 (OpenAI) vs 伍德 (Gemini) + 暴力模型偵測")
 
 # --- 1. 美股行事曆 ---
 CALENDAR_DATA = {
@@ -80,7 +80,7 @@ def calc_graham(info):
         return math.sqrt(22.5 * eps * bvps) if eps > 0 and bvps > 0 else 0
     except: return 0
 
-# --- 🧠 AI 大腦區 (OpenAI) ---
+# --- 🧠 AI 大腦區 (OpenAI - 巴菲特) ---
 def ask_openai(api_key, macro, fomc, df_s):
     try:
         client = openai.OpenAI(api_key=api_key)
@@ -97,33 +97,38 @@ def ask_openai(api_key, macro, fomc, df_s):
         return res.choices[0].message.content
     except Exception as e: return f"OpenAI 罷工: {str(e)}"
 
-# --- 🧠 AI 大腦區 (Gemini 自動偵測版) ---
+# --- 🧠 AI 大腦區 (Gemini - 伍德 - 暴力窮舉版) ---
 def ask_gemini(api_key, macro, fomc, df_s):
     try:
         genai.configure(api_key=api_key)
         
-        # 🌟 自動偵測可用模型 (Auto-Detect Logic)
-        available_models = []
-        target_model_name = "gemini-pro" # 預設備案
+        # 1. 定義白名單 (優先順序: 快 -> 強 -> 穩)
+        candidate_models = [
+            'gemini-1.5-flash',
+            'gemini-1.5-flash-latest',
+            'gemini-1.5-pro',
+            'gemini-1.5-pro-latest',
+            'gemini-1.0-pro',
+            'gemini-pro'
+        ]
         
+        target_model_name = None
+        
+        # 2. 嘗試從 API 抓取可用清單
         try:
-            # 嘗試列出所有可用模型
-            for m in genai.list_models():
-                if 'generateContent' in m.supported_generation_methods:
-                    available_models.append(m.name)
-            
-            # 優先順序：Flash (快) -> Pro 1.5 (強) -> Pro 1.0 (穩)
-            if any('gemini-1.5-flash' in m for m in available_models):
-                target_model_name = 'gemini-1.5-flash'
-            elif any('gemini-1.5-pro' in m for m in available_models):
-                target_model_name = 'gemini-1.5-pro'
-            elif any('gemini-pro' in m for m in available_models):
-                target_model_name = 'gemini-pro'
+            available = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            for candidate in candidate_models:
+                if candidate in available:
+                    target_model_name = candidate
+                    break
         except:
-            # 如果列出模型失敗，直接盲猜最舊版
+            pass 
+            
+        # 3. 最後手段
+        if not target_model_name:
             target_model_name = 'gemini-pro'
 
-        # 建立模型
+        # 4. 建立模型
         model = genai.GenerativeModel(target_model_name)
         
         picks = []
@@ -137,9 +142,8 @@ def ask_gemini(api_key, macro, fomc, df_s):
         """
         response = model.generate_content(prompt)
         return response.text
-    except Exception as e:
-        # 如果還是失敗，把可用模型印出來給你看
-        return f"Gemini 罷工: {str(e)} (模型自動選擇: {target_model_name})"
+    except Exception as e: 
+        return f"Gemini 罷工 ({target_model_name}): {str(e)}"
 
 # --- 評分 ---
 def score_us_stock(rsi, peg, pe, roe, de, fcf, change, margin, macro):
@@ -220,7 +224,7 @@ if st.button('🚀 雙引擎掃描美股'):
     
     # 平行處理
     if openai_key or gemini_key:
-        with st.spinner("🤖 雙 AI 正在辯論中 (自動偵測模型)..."):
+        with st.spinner("🤖 雙 AI 正在辯論中 (自動選擇模型)..."):
             if openai_key: st.session_state.ai_response_us_openai = ask_openai(openai_key, mac, (fomc, days), ds)
             if gemini_key: st.session_state.ai_response_us_gemini = ask_gemini(gemini_key, mac, (fomc, days), ds)
 
@@ -254,4 +258,3 @@ if st.button('🚀 雙引擎掃描美股'):
         if not de.empty: 
             st.dataframe(de.sort_values(by="分數", ascending=False).style.map(highlight_score, subset=['分數']))
         else: st.warning("無ETF數據")
-        
