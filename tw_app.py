@@ -5,8 +5,8 @@ import time
 import openai
 import math
 
-st.set_page_config(page_title="🇹🇼 Moat Hunter (TW Fix)", layout="wide")
-st.title("🇹🇼 Moat Hunter (台股穩定版)")
+st.set_page_config(page_title="🇹🇼 Moat Hunter (High Contrast)", layout="wide")
+st.title("🇹🇼 Moat Hunter (高對比版)")
 st.markdown("### 策略：自動校正代號 + 殖利率 + 外資動向")
 
 # 預設清單
@@ -161,18 +161,24 @@ if st.button('🚀 掃描台股'):
         with st.spinner("AI 分析中..."): st.session_state.ai_response_tw = ask_ai(api_key, mac, ds, de)
     if st.session_state.ai_response_tw: st.info(st.session_state.ai_response_tw)
     
-    def hi(v): return 'background-color: #28a745' if v>=80 else 'background-color: #d4edda' if v>=60 else ''
+    # --- 全新高對比樣式 ---
+    def highlight_score(val):
+        if val >= 80:
+            # 80分以上：深綠底 + 白字 + 粗體 (超明顯)
+            return 'background-color: #1b5e20; color: white; font-weight: bold;'
+        elif val >= 60:
+            # 60分以上：淺綠底 + 黑字 (容易閱讀)
+            return 'background-color: #c8e6c9; color: black;'
+        return ''
     
     cl, cr = st.columns(2)
     with cl:
         st.subheader("🏢 個股")
         if not ds.empty: 
-            # 修正點：使用 by="分數" 與 ascending=False 明確指定排序
-            st.dataframe(ds.sort_values(by="分數", ascending=False).style.map(hi, subset=['分數']))
+            st.dataframe(ds.sort_values(by="分數", ascending=False).style.map(highlight_score, subset=['分數']))
         else: st.warning("無個股數據")
     with cr:
         st.subheader("📊 ETF")
         if not de.empty: 
-            # 修正點：使用 by="分數" 與 ascending=False 明確指定排序
-            st.dataframe(de.sort_values(by="分數", ascending=False).style.map(hi, subset=['分數']))
+            st.dataframe(de.sort_values(by="分數", ascending=False).style.map(highlight_score, subset=['分數']))
         else: st.warning("無ETF數據")
