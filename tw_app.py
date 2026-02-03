@@ -6,7 +6,7 @@ import openai
 import math
 
 st.set_page_config(page_title="🇹🇼 Moat Hunter (TW Fix)", layout="wide")
-st.title("🇹🇼 Moat Hunter (台股修正版)")
+st.title("🇹🇼 Moat Hunter (台股穩定版)")
 st.markdown("### 策略：自動校正代號 + 殖利率 + 外資動向")
 
 # 預設清單
@@ -35,7 +35,6 @@ if selected_theme == "🔥 自選監控":
         if new.isdigit():
             new = f"{new}.TW"
             st.sidebar.success(f"已自動修正為: {new}")
-            
         if new not in st.session_state.watchlist_tw: 
             st.session_state.watchlist_tw.append(new)
             
@@ -69,7 +68,6 @@ def calc_graham(info):
 def ask_ai(api_key, macro, df_s, df_e):
     client = openai.OpenAI(api_key=api_key)
     picks = []
-    # 修正點：這裡抓取的欄位名稱必須與 get_data 裡存入的一致
     if not df_s.empty: picks += df_s.head(3)[['代號','現價','殖利率','評分原因']].to_dict('records')
     
     prompt = f"""
@@ -139,14 +137,12 @@ def get_data(tickers):
                 if is_etf:
                     ma60 = h['Close'].rolling(60).mean().iloc[-1]
                     sc, re = score_tw_etf(rsi, yld, cur, ma60, mac)
-                    # 修正：統一欄位名稱為 "評分原因"
                     el.append({"代號":t.replace(".TW",""), "現價":f"{cur:.1f}", "殖利率":f"{yld:.1f}%", "分數":int(sc), "評分原因":re})
                 else:
                     g = calc_graham(info)
                     m = ((g-cur)/cur)*100 if g>0 else 0
                     pe=info.get('trailingPE',0); roe=(info.get('returnOnEquity',0) or 0)*100
                     sc, re = score_tw_stock(rsi, pe, yld, roe, chg, m, mac)
-                    # 修正：統一欄位名稱為 "評分原因"
                     sl.append({"代號":t.replace(".TW",""), "現價":f"{cur:.1f}", "葛拉漢":f"{g:.1f}" if g>0 else "-", "殖利率":f"{yld:.1f}%", "分數":int(sc), "評分原因":re})
         except: pass
         bar.progress((i+1)/len(tickers))
@@ -161,18 +157,22 @@ if st.button('🚀 掃描台股'):
     c1.metric("USD/TWD", f"{mac['twd']:.2f}", f"{mac['twd_chg']:.2f}%", delta_color="inverse")
     c2.metric("費半", f"{mac['sox']:.2f}%")
     
-    # 這裡現在不會報錯了，因為欄位名稱已經統一
     if api_key:
         with st.spinner("AI 分析中..."): st.session_state.ai_response_tw = ask_ai(api_key, mac, ds, de)
     if st.session_state.ai_response_tw: st.info(st.session_state.ai_response_tw)
     
     def hi(v): return 'background-color: #28a745' if v>=80 else 'background-color: #d4edda' if v>=60 else ''
+    
     cl, cr = st.columns(2)
     with cl:
-        st.subheader("🏢 個股"); 
-        if not ds.empty: st.dataframe(ds.sort_values("分數",0).style.map(hi, subset=['分數']))
+        st.subheader("🏢 個股")
+        if not ds.empty: 
+            # 修正點：使用 by="分數" 與 ascending=False 明確指定排序
+            st.dataframe(ds.sort_values(by="分數", ascending=False).style.map(hi, subset=['分數']))
         else: st.warning("無個股數據")
     with cr:
-        st.subheader("📊 ETF"); 
-        if not de.empty: st.dataframe(de.sort_values("分數",0).style.map(hi, subset=['分數']))
+        st.subheader("📊 ETF")
+        if not de.empty: 
+            # 修正點：使用 by="分數" 與 ascending=False 明確指定排序
+            st.dataframe(de.sort_values(by="分數", ascending=False).style.map(hi, subset=['分數']))
         else: st.warning("無ETF數據")
