@@ -5,39 +5,30 @@ from datetime import datetime
 import openai
 import math
 
-st.set_page_config(page_title="🇺🇸 Moat Hunter (Structure)", layout="wide")
+st.set_page_config(page_title="🇺🇸 Moat Hunter (Fixed)", layout="wide")
 st.title("🇺🇸 Moat Hunter (美股結構版)")
 st.markdown("### 策略：供應鏈地位 + 護城河優勢 + 剛性需求")
 
-# --- 設定與清單 (結構性獲利) ---
+# --- 設定與清單 ---
 CALENDAR_DATA = {
     "FOMC": [{"date": "2026-03-18"}, {"date": "2026-04-29"}, {"date": "2026-06-17"}]
 }
 
 TREND_THEMES = {
     "🔥 自選監控": [], 
-    
-    "⛓️ 核心供應鏈 (半導體軍火商)": {
-        "logic": "控制全球晶片製造的咽喉，沒有它們就沒有 AI。",
+    "⛓️ 核心供應鏈": {
+        "logic": "半導體設備與先進製程，AI 的軍火商。",
         "tickers": ['ASML', 'AMAT', 'LRCX', 'TSM', 'KLAC'] 
-        # ASML(光刻機), Applied Materials(設備), Lam Research(蝕刻), 台積電ADR, KLA(檢測)
     },
-    
-    "🏰 寬護城河 (壟斷/定價權)": {
-        "logic": "擁有極高毛利與轉換成本，通膨下依然能漲價。",
+    "🏰 寬護城河": {
+        "logic": "擁有定價權的軟體與支付巨頭。",
         "tickers": ['MSFT', 'GOOGL', 'V', 'MA', 'COST'] 
-        # 微軟(軟體霸主), Google(搜尋), Visa/Mastercard(支付壟斷), Costco(會員護城河)
     },
-    
-    "🚀 強勁需求 (AI算力/電力/藥品)": {
-        "logic": "市場供不應求，訂單滿載。",
+    "🚀 強勁需求": {
+        "logic": "算力、電力、減肥藥，市場供不應求。",
         "tickers": ['NVDA', 'AVGO', 'VST', 'CEG', 'LLY'] 
-        # NVIDIA(算力), Broadcom(傳輸), Vistra/Constellation(缺電), Eli Lilly(減肥藥需求)
     }
 }
-
-# 即使清單移除了 ETF，保留這個列表以防使用者手動查詢
-KNOWN_ETFS = ['VOO', 'QQQ', 'SPY', 'TLT', 'SMH', 'SOXX', 'XLK', 'SCHD']
 
 if 'watchlist_us' not in st.session_state: st.session_state.watchlist_us = ['NVDA', 'MSFT'] 
 if 'ai_response_us_conservative' not in st.session_state: st.session_state.ai_response_us_conservative = None
@@ -79,25 +70,19 @@ def get_fomc():
         if d >= today: return (d - today).days
     return 0
 
-def calc_graham(info):
-    try:
-        eps = info.get('trailingEps', 0)
-        bvps = info.get('bookValue', 0)
-        return math.sqrt(22.5 * eps * bvps) if eps > 0 and bvps > 0 else 0
-    except: return 0
-
 def ask_ai(api_key, persona, macro, days, df_s):
     try:
         client = openai.OpenAI(api_key=api_key)
         picks = []
-        if not df_s.empty: picks += df_s.head(3)[['代號','現價','葛拉漢價','評分原因']].to_dict('records')
+        # 🟢 修正點：這裡改成抓取「毛利率」和「PEG」，不再抓「葛拉漢價」
+        if not df_s.empty: picks += df_s.head(3)[['代號','現價','毛利率','PEG','評分原因']].to_dict('records')
         
         if persona == "conservative":
-            sys_msg = "你是巴菲特風格的價值投資者。嚴格看重護城河與安全邊際。"
-            user_msg = f"宏觀: 利率{macro['rate']:.1f}%, VIX {macro['vix']:.1f}, FOMC剩{days}天。分析: {picks}。請分析這些公司的「護城河」是否夠深？估值是否過高？"
+            sys_msg = "你是巴菲特風格的價值投資者。嚴格看重護城河(毛利率)與安全邊際。"
+            user_msg = f"宏觀: 利率{macro['rate']:.1f}%, VIX {macro['vix']:.1f}, FOMC剩{days}天。分析: {picks}。請分析這些公司的「護城河」是否夠深？PEG是否合理？"
         else:
             sys_msg = "你是凱薩琳伍德風格的成長型投資者。專注結構性短缺與破壞式創新。"
-            user_msg = f"宏觀: VIX {macro['vix']:.1f}。分析: {picks}。請分析這些公司的「供應鏈地位」或「市場需求」是否強勁？忽略短期本益比。"
+            user_msg = f"宏觀: VIX {macro['vix']:.1f}。分析: {picks}。請分析這些公司的「供應鏈地位」或「市場需求」是否強勁？忽略短期波動。"
 
         res = client.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -108,13 +93,14 @@ def ask_ai(api_key, persona, macro, days, df_s):
 
 def score_us_stock(rsi, peg, margin, roe, change, macro):
     score = 50; det = []
-    # 評分邏輯優化：看重毛利(護城河)與PEG(成長性)
+    # 評分邏輯
     if margin > 50: score += 20; det.append("🏰強護城河")
     elif margin > 30: score += 10; det.append("💎高毛利")
     
     if roe > 20: score += 15; det.append("👑ROE頂級")
     
-    if peg > 0 and peg < 1.2: score += 15; det.append("🚀PEG低估") # 成長股最重要指標
+    if peg > 0 and peg < 1.2: score += 15; det.append("🚀PEG低估")
+    elif peg > 2.5: score -= 5; det.append("⚠️PEG高")
     
     if macro['vix'] > 30: score += 15; det.append("🩸恐慌買點")
     if rsi < 30: score += 15; det.append("📉超賣")
@@ -142,9 +128,6 @@ def get_data(tickers):
             rsi = 100 - (100/(1 + (gain/loss))).iloc[-1]
             
             info = s.info
-            g = calc_graham(info)
-            m = ((g-cur)/cur)*100 if g>0 else 0
-            
             peg = info.get('pegRatio', 0)
             roe = (info.get('returnOnEquity', 0) or 0)*100
             margin = (info.get('grossMargins', 0) or 0) * 100
@@ -153,8 +136,8 @@ def get_data(tickers):
             sl.append({
                 "代號":t, 
                 "現價":f"{cur:.2f}", 
-                "毛利率":f"{margin:.1f}%", # 護城河指標
-                "PEG":f"{peg:.2f}" if peg else "-", # 成長指標
+                "毛利率":f"{margin:.1f}%", 
+                "PEG":f"{peg:.2f}" if peg else "-", 
                 "分數":int(sc), 
                 "評分原因":re
             })
