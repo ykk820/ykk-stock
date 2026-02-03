@@ -1,11 +1,6 @@
 streamlit
-yfinance
 pandas
+yfinance
 openai
-lxml
 plotly
-requests
-html5lib
-beautifulsoup4
-openpyxl
-cloudscraper
+matplotlib
