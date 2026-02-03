@@ -4,7 +4,7 @@ import yfinance as yf
 import plotly.express as px
 from openai import OpenAI
 import json
-import math # 引入數學模組來處理 NaN
+import math
 
 # ---------------------------------------------------------
 # 1. 系統設定
@@ -48,8 +48,8 @@ def analyze_stock_with_gpt(client, ticker, financial_data, business_summary):
     Business Summary: {business_summary}
     
     Key Metrics:
-    - Revenue Growth: {financial_data.get('revenueGrowth', 0) * 100:.2f}%
-    - Gross Margins: {financial_data.get('grossMargins', 0) * 100:.2f}%
+    - Revenue Growth: {financial_data.get('revenueGrowth', 0)}
+    - Gross Margins: {financial_data.get('grossMargins', 0)}
     """
 
     try:
@@ -81,21 +81,16 @@ def fetch_data_and_analyze(tickers, client):
             stock = yf.Ticker(ticker)
             info = stock.info
             
-            # 數據防呆處理
-            rev_growth = info.get('revenueGrowth', 0)
-            if rev_growth is None: rev_growth = 0
-            
-            gross_margin = info.get('grossMargins', 0)
-            if gross_margin is None: gross_margin = 0
-            
-            current_price = info.get('currentPrice', 0)
-            if current_price is None: current_price = 0
-            
+            # 數據防呆處理：確保是數字，如果抓不到設為 0
+            def safe_get(key):
+                val = info.get(key, 0)
+                return val if val is not None else 0
+
             fin_data = {
-                'revenueGrowth': rev_growth,
-                'grossMargins': gross_margin,
+                'revenueGrowth': safe_get('revenueGrowth'),
+                'grossMargins': safe_get('grossMargins'),
+                'currentPrice': safe_get('currentPrice'),
                 'sector': info.get('sector', 'Tech'),
-                'currentPrice': current_price
             }
             summary = info.get('longBusinessSummary', 'No summary available.')
             
@@ -107,6 +102,7 @@ def fetch_data_and_analyze(tickers, client):
                 "AI_Score": ai_result.get('score', 0),
                 "Moat": ai_result.get('moat_rating', 'None'),
                 "Reason": ai_result.get('reason', 'No reason provided'),
+                # 這裡先保持原始數值，後面再一次轉型
                 "Revenue_Growth": fin_data['revenueGrowth'] * 100,
                 "Gross_Margin": fin_data['grossMargins'] * 100
             })
@@ -133,8 +129,24 @@ if st.button("🚀 啟動 AI 分析引擎"):
                 df = fetch_data_and_analyze(tickers_list, client)
             
             if not df.empty:
+                # -----------------------------------------------------
+                # 🔥 數據強制消毒區 (Data Sanitization)
+                # -----------------------------------------------------
+                # 這一步是關鍵：強制將所有數值欄位轉為數字，無法轉換的變成 0
+                cols_to_numeric = ['AI_Score', 'Revenue_Growth', 'Gross_Margin', 'Price']
+                for col in cols_to_numeric:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                
+                # 處理 Bubble Size：確保完全是正數 (Float)
+                # 1. 取出數字 2. 轉成 float 3. 處理 NaN 4. 確保至少是 1.0
+                df['Bubble_Size'] = df['Revenue_Growth'].apply(lambda x: max(float(x), 1.0) if not math.isnan(x) else 1.0)
+                
+                # 排序
                 df = df.sort_values(by="AI_Score", ascending=False)
                 
+                # -----------------------------------------------------
+                # 顯示表格
+                # -----------------------------------------------------
                 st.subheader("🏆 AI 精選高潛力股")
                 try:
                     st.dataframe(
@@ -145,31 +157,22 @@ if st.button("🚀 啟動 AI 分析引擎"):
                 except:
                     st.dataframe(df, use_container_width=True)
                 
-                # --- 視覺化分析 (包含終極防呆邏輯) ---
+                # -----------------------------------------------------
+                # 視覺化分析
+                # -----------------------------------------------------
                 col1, col2 = st.columns([2, 1])
                 
                 with col1:
                     st.subheader("矩陣分析")
                     
-                    # 【終極數據清洗函數】
-                    def clean_bubble_size(val):
-                        try:
-                            v = float(val)
-                            # 如果是 NaN (空值) 或者小於等於 0，一律設為 1 (最小可顯示單位)
-                            if math.isnan(v) or v <= 0:
-                                return 1.0
-                            return v
-                        except:
-                            return 1.0
-
-                    # 應用清洗函數
-                    df['Bubble_Size'] = df['Revenue_Growth'].apply(clean_bubble_size)
+                    # 再次確保 Moat 是字串，避免錯誤
+                    df['Moat'] = df['Moat'].astype(str)
                     
                     fig = px.scatter(
                         df, 
                         x="Gross_Margin", 
                         y="AI_Score", 
-                        size="Bubble_Size", # 這裡現在保證都是正數了
+                        size="Bubble_Size", # 使用消毒過的大小
                         color="Moat",
                         hover_name="Ticker",
                         text="Ticker",
@@ -193,7 +196,7 @@ if st.button("🚀 啟動 AI 分析引擎"):
                     
                 st.markdown("### 📝 詳細報告")
                 for index, row in df.iterrows():
-                    with st.expander(f"{row['Ticker']} - {row['AI_Score']} 分"):
+                    with st.expander(f"{row['Ticker']} - {row['AI_Score']:.0f} 分"):
                         st.write(row['Reason'])
 
         except Exception as e:
