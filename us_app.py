@@ -8,8 +8,8 @@ import math
 import google.generativeai as genai
 
 st.set_page_config(page_title="🇺🇸 Moat Hunter (Dual AI)", layout="wide")
-st.title("🇺🇸 Moat Hunter (雙 AI 辯論版)")
-st.markdown("### 策略：OpenAI (巴菲特) vs Gemini (伍德) + 葛拉漢估值")
+st.title("🇺🇸 Moat Hunter (美股雙 AI 辯論版)")
+st.markdown("### 策略：巴菲特 (OpenAI) vs 伍德 (Gemini) + 升降息預測")
 
 # --- 1. 美股行事曆 ---
 CALENDAR_DATA = {
@@ -101,7 +101,8 @@ def ask_openai(api_key, macro, fomc, df_s):
 def ask_gemini(api_key, macro, fomc, df_s):
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # ⚠️ 使用 gemini-pro 以確保最高相容性
+        model = genai.GenerativeModel('gemini-pro')
         
         picks = []
         if not df_s.empty: picks += df_s.head(3)[['代號','現價','葛拉漢價','評分原因']].to_dict('records')
@@ -110,7 +111,7 @@ def ask_gemini(api_key, macro, fomc, df_s):
         你是【凱薩琳伍德風格】的成長型投資者。繁體中文。
         宏觀: 隱含利率 {macro['rate']:.2f}%, 10年債 {macro['tnx']:.2f}%, VIX {macro['vix']:.2f}。
         精選: {picks}
-        任務: 請用「創新、顛覆性趨勢」的角度分析。不要太在意現在的估值，重點是未來的成長潛力與護城河。鼓勵大膽佈局。
+        任務: 請用「創新、顛覆性趨勢」的角度分析。不要太在意現在的估值(葛拉漢價)，重點是未來的成長潛力與護城河。鼓勵大膽佈局。
         """
         response = model.generate_content(prompt)
         return response.text
@@ -189,9 +190,9 @@ fomc, days = get_fomc()
 c1,c2,c3 = st.columns(3)
 if st.button('🚀 雙引擎掃描美股'):
     ds, de, mac = get_data(target_tickers)
-    c1.metric("隱含利率", f"{mac['rate']:.2f}%")
-    c2.metric("VIX", f"{mac['vix']:.2f}")
-    c3.metric("FOMC", f"剩 {days} 天")
+    c1.metric("隱含利率 (升降息)", f"{mac['rate']:.2f}%")
+    c2.metric("VIX 恐慌", f"{mac['vix']:.2f}")
+    c3.metric("FOMC 會議", f"剩 {days} 天")
     
     # 平行處理
     if openai_key or gemini_key:
