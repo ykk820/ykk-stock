@@ -5,32 +5,48 @@ from datetime import datetime
 import openai
 import math
 
-st.set_page_config(page_title="🇺🇸 Moat Hunter (Pure)", layout="wide")
-st.title("🇺🇸 Moat Hunter (美股極簡版)")
-st.markdown("### 策略：巴菲特 vs 伍德 (單引擎雙人格)")
+st.set_page_config(page_title="🇺🇸 Moat Hunter (Structure)", layout="wide")
+st.title("🇺🇸 Moat Hunter (美股結構版)")
+st.markdown("### 策略：供應鏈地位 + 護城河優勢 + 剛性需求")
 
-# --- 設定與清單 ---
+# --- 設定與清單 (結構性獲利) ---
 CALENDAR_DATA = {
     "FOMC": [{"date": "2026-03-18"}, {"date": "2026-04-29"}, {"date": "2026-06-17"}]
 }
 
 TREND_THEMES = {
     "🔥 自選監控": [], 
-    "📊 指數 ETF": {"tickers": ['VOO', 'QQQ', 'TLT', 'SMH']},
-    "⚡️ AI 電力": {"tickers": ['CEG', 'VST', 'NEE', 'CCJ']},
-    "🧠 AI 基建": {"tickers": ['NVDA', 'TSM', 'AVGO', 'MSFT', 'PLTR']},
-    "🛒 抗衰退": {"tickers": ['COST', 'KO', 'PEP', 'MCD']}
+    
+    "⛓️ 核心供應鏈 (半導體軍火商)": {
+        "logic": "控制全球晶片製造的咽喉，沒有它們就沒有 AI。",
+        "tickers": ['ASML', 'AMAT', 'LRCX', 'TSM', 'KLAC'] 
+        # ASML(光刻機), Applied Materials(設備), Lam Research(蝕刻), 台積電ADR, KLA(檢測)
+    },
+    
+    "🏰 寬護城河 (壟斷/定價權)": {
+        "logic": "擁有極高毛利與轉換成本，通膨下依然能漲價。",
+        "tickers": ['MSFT', 'GOOGL', 'V', 'MA', 'COST'] 
+        # 微軟(軟體霸主), Google(搜尋), Visa/Mastercard(支付壟斷), Costco(會員護城河)
+    },
+    
+    "🚀 強勁需求 (AI算力/電力/藥品)": {
+        "logic": "市場供不應求，訂單滿載。",
+        "tickers": ['NVDA', 'AVGO', 'VST', 'CEG', 'LLY'] 
+        # NVIDIA(算力), Broadcom(傳輸), Vistra/Constellation(缺電), Eli Lilly(減肥藥需求)
+    }
 }
+
+# 即使清單移除了 ETF，保留這個列表以防使用者手動查詢
 KNOWN_ETFS = ['VOO', 'QQQ', 'SPY', 'TLT', 'SMH', 'SOXX', 'XLK', 'SCHD']
 
-if 'watchlist_us' not in st.session_state: st.session_state.watchlist_us = ['VOO', 'NVDA'] 
+if 'watchlist_us' not in st.session_state: st.session_state.watchlist_us = ['NVDA', 'MSFT'] 
 if 'ai_response_us_conservative' not in st.session_state: st.session_state.ai_response_us_conservative = None
 if 'ai_response_us_growth' not in st.session_state: st.session_state.ai_response_us_growth = None
 
 # --- 側邊欄 ---
 st.sidebar.header("🚀 設定")
 api_key = st.sidebar.text_input("OpenAI Key (sk-...):", type="password")
-selected_theme = st.sidebar.selectbox("板塊:", list(TREND_THEMES.keys()))
+selected_theme = st.sidebar.selectbox("投資主題:", list(TREND_THEMES.keys()))
 
 target_tickers = []
 if selected_theme == "🔥 自選監控":
@@ -43,6 +59,7 @@ if selected_theme == "🔥 自選監控":
     target_tickers = st.session_state.watchlist_us
 else:
     target_tickers = TREND_THEMES[selected_theme]["tickers"]
+    st.sidebar.info(f"💡 {TREND_THEMES[selected_theme]['logic']}")
 
 # --- 核心函式 ---
 @st.cache_data(ttl=300)
@@ -76,11 +93,11 @@ def ask_ai(api_key, persona, macro, days, df_s):
         if not df_s.empty: picks += df_s.head(3)[['代號','現價','葛拉漢價','評分原因']].to_dict('records')
         
         if persona == "conservative":
-            sys_msg = "你是巴菲特風格的價值投資者。保守、看重安全邊際。"
-            user_msg = f"宏觀: 利率{macro['rate']:.1f}%, VIX {macro['vix']:.1f}, FOMC剩{days}天。分析: {picks}。若價格高於葛拉漢價請警告風險。"
+            sys_msg = "你是巴菲特風格的價值投資者。嚴格看重護城河與安全邊際。"
+            user_msg = f"宏觀: 利率{macro['rate']:.1f}%, VIX {macro['vix']:.1f}, FOMC剩{days}天。分析: {picks}。請分析這些公司的「護城河」是否夠深？估值是否過高？"
         else:
-            sys_msg = "你是凱薩琳伍德風格的成長型投資者。看重破壞式創新、未來潛力。"
-            user_msg = f"宏觀: 利率{macro['rate']:.1f}%, VIX {macro['vix']:.1f}。分析: {picks}。忽略短期估值，專注未來護城河與成長爆發力。"
+            sys_msg = "你是凱薩琳伍德風格的成長型投資者。專注結構性短缺與破壞式創新。"
+            user_msg = f"宏觀: VIX {macro['vix']:.1f}。分析: {picks}。請分析這些公司的「供應鏈地位」或「市場需求」是否強勁？忽略短期本益比。"
 
         res = client.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -91,12 +108,18 @@ def ask_ai(api_key, persona, macro, days, df_s):
 
 def score_us_stock(rsi, peg, margin, roe, change, macro):
     score = 50; det = []
-    if macro['vix']>30: score+=20; det.append("🩸恐慌")
-    if margin>10: score+=20; det.append("🏰低估")
-    if roe>15: score+=10; det.append("✅ROE優")
-    if peg>0 and peg<1.2: score+=15; det.append("💎PEG低")
-    if rsi<30: score+=15; det.append("📉超賣")
-    if change<-2: score+=10; det.append("🔥大跌")
+    # 評分邏輯優化：看重毛利(護城河)與PEG(成長性)
+    if margin > 50: score += 20; det.append("🏰強護城河")
+    elif margin > 30: score += 10; det.append("💎高毛利")
+    
+    if roe > 20: score += 15; det.append("👑ROE頂級")
+    
+    if peg > 0 and peg < 1.2: score += 15; det.append("🚀PEG低估") # 成長股最重要指標
+    
+    if macro['vix'] > 30: score += 15; det.append("🩸恐慌買點")
+    if rsi < 30: score += 15; det.append("📉超賣")
+    if change < -2: score += 10; det.append("🔥回檔")
+    
     return max(0,min(100,score)), " ".join(det)
 
 def get_data(tickers):
@@ -121,11 +144,20 @@ def get_data(tickers):
             info = s.info
             g = calc_graham(info)
             m = ((g-cur)/cur)*100 if g>0 else 0
+            
             peg = info.get('pegRatio', 0)
             roe = (info.get('returnOnEquity', 0) or 0)*100
+            margin = (info.get('grossMargins', 0) or 0) * 100
             
-            sc, re = score_us_stock(rsi, peg, m, roe, chg, mac)
-            sl.append({"代號":t, "現價":f"{cur:.2f}", "葛拉漢價":f"{g:.2f}" if g>0 else "-", "邊際":f"{m:.1f}%", "分數":int(sc), "評分原因":re})
+            sc, re = score_us_stock(rsi, peg, margin, roe, chg, mac)
+            sl.append({
+                "代號":t, 
+                "現價":f"{cur:.2f}", 
+                "毛利率":f"{margin:.1f}%", # 護城河指標
+                "PEG":f"{peg:.2f}" if peg else "-", # 成長指標
+                "分數":int(sc), 
+                "評分原因":re
+            })
         except: pass
         bar.progress((i+1)/len(tickers))
         
@@ -134,7 +166,7 @@ def get_data(tickers):
 # --- UI ---
 days = get_fomc()
 c1,c2,c3 = st.columns(3)
-if st.button('🚀 掃描美股'):
+if st.button('🚀 掃描結構性機會'):
     ds, mac = get_data(target_tickers)
     c1.metric("利率預期", f"{mac['rate']:.2f}%")
     c2.metric("VIX", f"{mac['vix']:.2f}")
@@ -147,7 +179,7 @@ if st.button('🚀 掃描美股'):
     
     if st.session_state.ai_response_us_conservative:
         st.write("### 🤖 觀點對決")
-        t1, t2 = st.tabs(["🧐 巴菲特 (價值)", "✨ 伍德 (成長)"])
+        t1, t2 = st.tabs(["🧐 巴菲特 (護城河)", "✨ 伍德 (需求&趨勢)"])
         with t1: st.info(st.session_state.ai_response_us_conservative)
         with t2: st.success(st.session_state.ai_response_us_growth)
 
