@@ -5,12 +5,12 @@ import time
 from datetime import datetime
 import openai
 import math
-import requests  # 👈 改用 requests 直接連線，避開套件版本問題
+import requests
 import json
 
-st.set_page_config(page_title="🇺🇸 Moat Hunter (HTTP)", layout="wide")
-st.title("🇺🇸 Moat Hunter (美股直連版)")
-st.markdown("### 策略：巴菲特 (OpenAI) vs 伍德 (Gemini) + HTTP直連")
+st.set_page_config(page_title="🇺🇸 Moat Hunter (Selector)", layout="wide")
+st.title("🇺🇸 Moat Hunter (美股手動切換版)")
+st.markdown("### 策略：巴菲特 (OpenAI) vs 伍德 (Gemini) + 模型自選")
 
 # --- 1. 美股行事曆 ---
 CALENDAR_DATA = {
@@ -34,10 +34,19 @@ if 'watchlist_us' not in st.session_state: st.session_state.watchlist_us = ['VOO
 if 'ai_response_us_openai' not in st.session_state: st.session_state.ai_response_us_openai = None
 if 'ai_response_us_gemini' not in st.session_state: st.session_state.ai_response_us_gemini = None
 
-# --- 側邊欄 ---
+# --- 側邊欄設定 ---
 st.sidebar.header("🚀 雙引擎設定")
 openai_key = st.sidebar.text_input("OpenAI Key (sk-...):", type="password")
 gemini_key = st.sidebar.text_input("Gemini Key (AIza...):", type="password")
+
+# 🌟 新增：模型選擇器 (讓使用者自己選能用的)
+st.sidebar.markdown("---")
+st.sidebar.caption("🔧 Gemini 模型微調")
+gemini_model = st.sidebar.selectbox(
+    "選擇模型:", 
+    ["gemini-pro", "gemini-1.5-flash", "gemini-1.5-pro"],
+    index=0  # 預設選第一個 (gemini-pro 最穩)
+)
 
 st.sidebar.markdown("---")
 selected_theme = st.sidebar.selectbox("板塊:", list(TREND_THEMES.keys()))
@@ -81,13 +90,12 @@ def calc_graham(info):
         return math.sqrt(22.5 * eps * bvps) if eps > 0 and bvps > 0 else 0
     except: return 0
 
-# --- 🧠 AI 大腦區 (OpenAI) ---
+# --- AI 大腦區 ---
 def ask_openai(api_key, macro, fomc, df_s):
     try:
         client = openai.OpenAI(api_key=api_key)
         picks = []
         if not df_s.empty: picks += df_s.head(3)[['代號','現價','葛拉漢價','評分原因']].to_dict('records')
-        
         prompt = f"""
         你是【巴菲特風格】的價值投資者。繁體中文。
         宏觀: 隱含利率 {macro['rate']:.2f}%, 10年債 {macro['tnx']:.2f}%, VIX {macro['vix']:.2f}, FOMC剩 {fomc[1]} 天。
@@ -98,13 +106,9 @@ def ask_openai(api_key, macro, fomc, df_s):
         return res.choices[0].message.content
     except Exception as e: return f"OpenAI 罷工: {str(e)}"
 
-# --- 🧠 AI 大腦區 (Gemini - HTTP 直連版) ---
-def ask_gemini(api_key, macro, fomc, df_s):
-    # 這裡不使用 google.generativeai 套件，改用 requests 直接發送
-    # 這可以 100% 避開套件版本過舊的問題
-    
-    # 目標模型：優先用 1.5 Flash
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+def ask_gemini(api_key, model_name, macro, fomc, df_s):
+    # 使用 HTTP 直連，並代入使用者選擇的模型名稱
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     
     picks = []
     if not df_s.empty: picks += df_s.head(3)[['代號','現價','葛拉漢價','評分原因']].to_dict('records')
@@ -113,31 +117,18 @@ def ask_gemini(api_key, macro, fomc, df_s):
     你是【凱薩琳伍德風格】的成長型投資者。繁體中文。
     宏觀: 隱含利率 {macro['rate']:.2f}%, 10年債 {macro['tnx']:.2f}%, VIX {macro['vix']:.2f}。
     精選: {picks}
-    任務: 請用「創新、顛覆性趨勢」的角度分析。不要太在意現在的估值(葛拉漢價)，重點是未來的成長潛力與護城河。鼓勵大膽佈局。
+    任務: 請用「創新、顛覆性趨勢」的角度分析。不要太在意現在的估值，重點是未來的成長潛力。
     """
     
-    payload = {
-        "contents": [{
-            "parts": [{"text": prompt_text}]
-        }]
-    }
+    payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
     
     try:
         response = requests.post(url, json=payload, headers={'Content-Type': 'application/json'})
-        
         if response.status_code == 200:
             result = response.json()
-            return result['candidates'][0]['content']['parts'][0]['text']
+            return f"✨ (使用模型: {model_name})\n\n{result['candidates'][0]['content']['parts'][0]['text']}"
         else:
-            # 如果 Flash 失敗，嘗試 fallback 到 Pro (直接換 URL)
-            url_fallback = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
-            response_fallback = requests.post(url_fallback, json=payload, headers={'Content-Type': 'application/json'})
-            if response_fallback.status_code == 200:
-                result = response_fallback.json()
-                return f"✨ (Fallback Mode)\n\n{result['candidates'][0]['content']['parts'][0]['text']}"
-            else:
-                return f"Gemini 連線失敗 (HTTP {response.status_code}): {response.text}"
-                
+            return f"Gemini 連線失敗 (HTTP {response.status_code}): {response.text}"
     except Exception as e:
         return f"Gemini 網路錯誤: {str(e)}"
 
@@ -174,25 +165,16 @@ def get_data(tickers):
         try:
             s = yf.Ticker(t)
             h = s.history(period="1y")
-            
-            if h.empty:
-                st.toast(f"找不到 {t}", icon="⚠️")
-                continue
-
+            if h.empty: continue
             if len(h)>200:
                 cur = h['Close'].iloc[-1]
                 chg = ((cur-h['Close'].iloc[-2])/h['Close'].iloc[-2])*100
-                
                 delta = h['Close'].diff()
                 gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-                loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-                loss = loss.replace(0, 0.001)
-                rs = gain / loss
-                rsi = 100 - (100/(1 + rs)).iloc[-1]
-                
+                loss = (-delta.where(delta < 0, 0)).rolling(14).mean().replace(0, 0.001)
+                rsi = 100 - (100/(1 + (gain/loss))).iloc[-1]
                 info = s.info
                 is_etf = (t in KNOWN_ETFS) or (info.get('quoteType')=='ETF')
-                
                 if is_etf:
                     dd = ((cur-h['Close'].max())/h['Close'].max())*100
                     sc, re = score_us_etf(rsi, dd, macro)
@@ -205,8 +187,6 @@ def get_data(tickers):
                     sl.append({"代號":t, "現價":f"{cur:.2f}", "葛拉漢價":f"{g:.2f}" if g>0 else "-", "邊際":f"{m:.1f}%", "分數":int(sc), "評分原因":re})
         except: pass
         bar.progress((i+1)/len(tickers))
-    
-    status.empty()
     return pd.DataFrame(sl), pd.DataFrame(el), macro
 
 # --- UI ---
@@ -218,26 +198,22 @@ if st.button('🚀 雙引擎掃描美股'):
     c2.metric("VIX", f"{mac['vix']:.2f}")
     c3.metric("FOMC", f"剩 {days} 天")
     
-    # 平行處理
     if openai_key or gemini_key:
-        with st.spinner("🤖 雙 AI 正在辯論中 (HTTP直連)..."):
+        with st.spinner(f"🤖 雙 AI 正在辯論中 ({gemini_model})..."):
             if openai_key: st.session_state.ai_response_us_openai = ask_openai(openai_key, mac, (fomc, days), ds)
-            if gemini_key: st.session_state.ai_response_us_gemini = ask_gemini(gemini_key, mac, (fomc, days), ds)
+            # 傳入使用者選擇的模型
+            if gemini_key: st.session_state.ai_response_us_gemini = ask_gemini(gemini_key, gemini_model, mac, (fomc, days), ds)
 
-    # 辯論面板
     if st.session_state.ai_response_us_openai or st.session_state.ai_response_us_gemini:
         st.write("### 🤖 投資觀點對決")
         tab1, tab2 = st.tabs(["🧐 OpenAI (巴菲特)", "✨ Gemini (伍德)"])
-        
         with tab1:
             if st.session_state.ai_response_us_openai: st.info(st.session_state.ai_response_us_openai)
             else: st.warning("未輸入 OpenAI Key")
-        
         with tab2:
             if st.session_state.ai_response_us_gemini: st.success(st.session_state.ai_response_us_gemini)
             else: st.warning("未輸入 Gemini Key")
     
-    # 高對比樣式
     def highlight_score(val):
         if val >= 80: return 'background-color: #1b5e20; color: white; font-weight: bold;'
         elif val >= 60: return 'background-color: #c8e6c9; color: black;'
@@ -246,11 +222,9 @@ if st.button('🚀 雙引擎掃描美股'):
     cl, cr = st.columns(2)
     with cl:
         st.subheader("🏢 價值股")
-        if not ds.empty: 
-            st.dataframe(ds.sort_values(by="分數", ascending=False).style.map(highlight_score, subset=['分數']))
+        if not ds.empty: st.dataframe(ds.sort_values(by="分數", ascending=False).style.map(highlight_score, subset=['分數']))
         else: st.warning("無個股數據")
     with cr:
         st.subheader("📊 ETF")
-        if not de.empty: 
-            st.dataframe(de.sort_values(by="分數", ascending=False).style.map(highlight_score, subset=['分數']))
+        if not de.empty: st.dataframe(de.sort_values(by="分數", ascending=False).style.map(highlight_score, subset=['分數']))
         else: st.warning("無ETF數據")
