@@ -84,10 +84,15 @@ def ask_openai(api_key, macro, df_s):
 
 def ask_gemini(api_key, macro, df_s):
     try:
+        # 設定 API
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # ⚠️ 這裡修改了：改用 'gemini-pro'，這是最穩定的版本，舊版套件也能跑
+        model = genai.GenerativeModel('gemini-pro')
+        
         picks = []
         if not df_s.empty: picks += df_s.head(3)[['代號','現價','毛利率','評分原因']].to_dict('records')
+        
         prompt = f"""
         你是【積極成長派】的矽谷投資人（類似凱薩琳伍德）。繁體中文。
         宏觀: USD/TWD {macro['twd']:.2f}, 費半 {macro['sox']:.2f}%。
@@ -118,11 +123,16 @@ def get_data(tickers):
     mac = get_tw_macro()
     sl = []
     bar = st.progress(0)
+    status = st.empty()
+    
     for i, t in enumerate(tickers):
+        status.text(f"分析中: {t}")
         try:
             s = yf.Ticker(t)
             h = s.history(period="6mo")
-            if h.empty: continue
+            if h.empty:
+                st.toast(f"找不到 {t}", icon="⚠️")
+                continue
             if len(h)>10:
                 cur = h['Close'].iloc[-1]
                 prev = h['Close'].iloc[-2] if h['Close'].iloc[-2]!=0 else cur
@@ -141,6 +151,8 @@ def get_data(tickers):
                 sl.append({"代號":t.replace(".TW",""), "現價":f"{cur:.1f}", "毛利率":f"{margin:.1f}%", "分數":int(sc), "評分原因":re})
         except: pass
         bar.progress((i+1)/len(tickers))
+    
+    status.empty()
     return pd.DataFrame(sl), mac
 
 # --- UI ---
@@ -150,13 +162,13 @@ if st.button('🚀 雙引擎啟動'):
     c1.metric("USD/TWD", f"{mac['twd']:.2f}", f"{mac['twd_chg']:.2f}%", delta_color="inverse")
     c2.metric("費半指數", f"{mac['sox']:.2f}%")
     
-    # 平行處理 (雖然這裡是簡單順序執行，但感覺像平行)
+    # 平行處理
     if openai_key or gemini_key:
         with st.spinner("🤖 雙 AI 正在辯論中..."):
             if openai_key: st.session_state.ai_response_openai = ask_openai(openai_key, mac, ds)
             if gemini_key: st.session_state.ai_response_gemini = ask_gemini(gemini_key, mac, ds)
 
-    # 顯示辯論結果 (使用 Tabs)
+    # 顯示辯論結果
     if st.session_state.ai_response_openai or st.session_state.ai_response_gemini:
         st.write("### 🤖 投資觀點對決")
         tab1, tab2 = st.tabs(["🧐 OpenAI (保守派)", "✨ Gemini (成長派)"])
@@ -178,3 +190,4 @@ if st.button('🚀 雙引擎啟動'):
     if not ds.empty: 
         st.dataframe(ds.sort_values(by="分數", ascending=False).style.map(highlight_score, subset=['分數']))
     else: st.warning("無數據")
+    
