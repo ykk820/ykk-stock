@@ -1,229 +1,205 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-import cloudscraper
 import plotly.express as px
+from openai import OpenAI
+import json
 
 # ---------------------------------------------------------
-# 設定網頁
+# 1. 系統設定
 # ---------------------------------------------------------
-st.set_page_config(page_title="大師持股追蹤器", layout="wide")
-st.title("🧠 Investment Gurus Tracker Pro")
-st.markdown("##### 🚀 自動爬蟲 + 真實數據庫備援系統")
+st.set_page_config(page_title="AI 超級成長股分析師", layout="wide")
+st.title("🤖 AI Super Growth Stock Analyzer")
+st.markdown("### 結合 GPT-4 的「質化分析」與財報數據的「量化篩選」")
 st.markdown("---")
 
-# ---------------------------------------------------------
-# 1. 真實數據庫 (Fallback)
-# ---------------------------------------------------------
-REAL_DATA_DB = {
-    "Warren Buffett (Berkshire)": [
-        {"Ticker": "AAPL", "Company": "Apple Inc.", "Portfolio_Pct": 40.5},
-        {"Ticker": "BAC", "Company": "Bank of America Corp", "Portfolio_Pct": 11.8},
-        {"Ticker": "AXP", "Company": "American Express", "Portfolio_Pct": 10.4},
-        {"Ticker": "KO", "Company": "Coca-Cola Co", "Portfolio_Pct": 7.3},
-        {"Ticker": "CVX", "Company": "Chevron Corp", "Portfolio_Pct": 5.1},
-        {"Ticker": "OXY", "Company": "Occidental Petroleum", "Portfolio_Pct": 4.2},
-        {"Ticker": "KHC", "Company": "Kraft Heinz Co", "Portfolio_Pct": 3.1},
-        {"Ticker": "MCO", "Company": "Moody's Corp", "Portfolio_Pct": 2.9},
-        {"Ticker": "CB", "Company": "Chubb Limited", "Portfolio_Pct": 2.0},
-        {"Ticker": "DVA", "Company": "DaVita Inc", "Portfolio_Pct": 1.0}
-    ],
-    "Bill Ackman (Pershing Square)": [
-        {"Ticker": "GOOGL", "Company": "Alphabet Inc. (Class A)", "Portfolio_Pct": 18.5},
-        {"Ticker": "CMG", "Company": "Chipotle Mexican Grill", "Portfolio_Pct": 16.8},
-        {"Ticker": "HLT", "Company": "Hilton Worldwide", "Portfolio_Pct": 15.2},
-        {"Ticker": "QSR", "Company": "Restaurant Brands Intl", "Portfolio_Pct": 14.1},
-        {"Ticker": "GOOG", "Company": "Alphabet Inc. (Class C)", "Portfolio_Pct": 12.3},
-        {"Ticker": "HHC", "Company": "Howard Hughes Holdings", "Portfolio_Pct": 11.4},
-        {"Ticker": "CP", "Company": "Canadian Pacific Kansas", "Portfolio_Pct": 10.2},
-        {"Ticker": "NKE", "Company": "Nike Inc.", "Portfolio_Pct": 1.5}
-    ],
-    "Michael Burry (Scion Asset)": [
-        {"Ticker": "BABA", "Company": "Alibaba Group", "Portfolio_Pct": 15.2},
-        {"Ticker": "JD", "Company": "JD.com Inc", "Portfolio_Pct": 12.5},
-        {"Ticker": "BIDU", "Company": "Baidu Inc", "Portfolio_Pct": 10.8},
-        {"Ticker": "REAL", "Company": "The RealReal", "Portfolio_Pct": 8.5},
-        {"Ticker": "CI", "Company": "Cigna Group", "Portfolio_Pct": 6.2},
-        {"Ticker": "BKNG", "Company": "Booking Holdings", "Portfolio_Pct": 5.5},
-        {"Ticker": "MOLN", "Company": "Molina Healthcare", "Portfolio_Pct": 5.1}
-    ],
-    "Howard Marks (Oaktree)": [
-        {"Ticker": "TRMD", "Company": "TORM plc", "Portfolio_Pct": 12.5},
-        {"Ticker": "VIST", "Company": "Vista Energy", "Portfolio_Pct": 8.2},
-        {"Ticker": "SBLK", "Company": "Star Bulk Carriers", "Portfolio_Pct": 6.5},
-        {"Ticker": "PGRE", "Company": "Paramount Group", "Portfolio_Pct": 4.1},
-        {"Ticker": "INFY", "Company": "Infosys Ltd", "Portfolio_Pct": 3.8},
-        {"Ticker": "VALE", "Company": "Vale S.A.", "Portfolio_Pct": 3.5}
-    ]
-}
-
-GURU_URLS = {
-    "Warren Buffett (Berkshire)": "https://stockcircle.com/portfolio/warren-buffett",
-    "Bill Ackman (Pershing Square)": "https://stockcircle.com/portfolio/bill-ackman",
-    "Michael Burry (Scion Asset)": "https://stockcircle.com/portfolio/michael-burry",
-    "Howard Marks (Oaktree)": "https://stockcircle.com/portfolio/howard-marks"
-}
-
-# ---------------------------------------------------------
-# 2. 爬蟲模組
-# ---------------------------------------------------------
-
-def scrape_data(guru_name):
-    url = GURU_URLS[guru_name]
-    scraper = cloudscraper.create_scraper() 
-    
-    try:
-        response = scraper.get(url, timeout=10)
-        if response.status_code != 200: return None
-
-        dfs = pd.read_html(response.text)
-        df = None
-        for table in dfs:
-            if 'Symbol' in table.columns:
-                df = table
-                break
-        
-        if df is None: return None
-        
-        clean_df = pd.DataFrame()
-        clean_df['Ticker'] = df['Symbol']
-        clean_df['Company'] = df['Name']
-        clean_df['Portfolio_Pct'] = df['Portfolio %']
-        
-        clean_df['Portfolio_Pct'] = pd.to_numeric(
-            clean_df['Portfolio_Pct'].astype(str).str.replace('%', '', regex=False), errors='coerce'
-        )
-        clean_df['Ticker'] = clean_df['Ticker'].astype(str).str.replace('.', '-', regex=False)
-        
-        return clean_df
-    except Exception:
-        return None
-
-# ---------------------------------------------------------
-# 3. 數據獲取邏輯 (修正：移除了 st.toast)
-# ---------------------------------------------------------
-@st.cache_data(ttl=3600)
-def get_guru_portfolio(guru_name):
-    # 這裡只處理資料，不處理 UI
-    
-    # 1. 嘗試爬蟲
-    df = scrape_data(guru_name)
-    if df is not None and not df.empty:
-        # 回傳資料 + 狀態碼
-        return df, "live"
-    
-    # 2. 嘗試備份
-    fallback_data = REAL_DATA_DB.get(guru_name, [])
-    return pd.DataFrame(fallback_data), "fallback"
-
-# ---------------------------------------------------------
-# 4. 股價函數
-# ---------------------------------------------------------
-def get_live_prices(tickers):
-    if not tickers: return {}
-    tickers = [x for x in tickers if isinstance(x, str) and len(x)>0]
-    
-    try:
-        data = yf.download(tickers, period="1d", group_by='ticker', threads=True, auto_adjust=True)
-    except:
-        return {}
-    
-    prices = {}
-    if len(tickers) == 1:
-        t = tickers[0]
-        try:
-            current = data['Close'].iloc[-1]
-            prev = data['Open'].iloc[-1]
-            prices[t] = {'Price': current, 'Change_Pct': ((current - prev)/prev)*100}
-        except:
-            prices[t] = {'Price': 0.0, 'Change_Pct': 0.0}
-    else:
-        for t in tickers:
-            try:
-                if t in data.columns.levels[0]:
-                    current = data[t]['Close'].iloc[-1]
-                    prev = data[t]['Open'].iloc[-1]
-                    if pd.isna(current): current = 0.0
-                    if pd.isna(prev) or prev == 0: prev = current if current!=0 else 1.0
-                    prices[t] = {'Price': current, 'Change_Pct': ((current - prev)/prev)*100}
-                else:
-                    prices[t] = {'Price': 0.0, 'Change_Pct': 0.0}
-            except:
-                prices[t] = {'Price': 0.0, 'Change_Pct': 0.0}
-    return prices
-
-# ---------------------------------------------------------
-# 5. 主程式 UI
-# ---------------------------------------------------------
-
+# 側邊欄：輸入 API Key (安全起見，不要寫死在程式碼裡)
 with st.sidebar:
-    st.header("🔍 選擇投資大師")
-    selected_guru = st.selectbox("請選擇：", list(REAL_DATA_DB.keys()))
-
-# 執行資料獲取
-with st.spinner(f'正在分析 {selected_guru} 的投資組合...'):
-    # 接收資料與狀態
-    df, data_source = get_guru_portfolio(selected_guru)
-
-# --- 關鍵修正：UI 顯示移到這裡 ---
-if data_source == "live":
-    st.toast("✅ 成功連線 StockCircle 抓取即時數據！", icon="🕷️")
-elif data_source == "fallback":
-    st.toast("🛡️ 爬蟲受阻，已自動切換至內建真實數據庫", icon="💾")
-
-if not df.empty:
-    with st.sidebar:
-        st.divider()
-        max_items = len(df)
-        top_n = st.slider("顯示持股數量", 3, max_items, min(10, max_items))
-
-    df_top = df.head(top_n).copy()
-    ticker_list = df_top['Ticker'].tolist()
+    st.header("🔑 設定")
+    api_key = st.text_input("請輸入 OpenAI API Key", type="password")
+    st.caption("你的 Key 不會被儲存，僅用於本次執行。")
     
-    with st.spinner('正在抓取即時股價...'):
-        price_data = get_live_prices(ticker_list)
+    # 選股清單
+    default_tickers = "PLTR, NU, GOOGL, MSFT, NVDA, RKLB, TSM, HIMS"
+    user_tickers = st.text_area("輸入股票代號 (用逗號分隔)", value=default_tickers)
+    tickers_list = [t.strip().upper() for t in user_tickers.split(",") if t.strip()]
+
+# ---------------------------------------------------------
+# 2. 核心：AI 分析師 (The Brain)
+# ---------------------------------------------------------
+def analyze_stock_with_gpt(client, ticker, financial_data, business_summary):
+    """
+    將數據丟給 GPT 進行分析
+    """
     
-    df_top['Current_Price'] = df_top['Ticker'].map(lambda x: price_data.get(x, {}).get('Price', 0.0))
-    df_top['Day_Change_%'] = df_top['Ticker'].map(lambda x: price_data.get(x, {}).get('Change_Pct', 0.0))
+    # System Prompt: 定義 AI 的角色
+    system_prompt = """
+    You are a world-class Hedge Fund Manager specializing in "High Growth + Wide Moat" stocks. 
+    Your investment philosophy combines Warren Buffett's focus on competitive advantage (Moat) 
+    with Cathie Wood's focus on disruptive innovation.
     
-    # 顯示
-    st.subheader(f"📊 {selected_guru} 持股透視")
+    Your Task:
+    1. Analyze the provided financial data and business summary.
+    2. Determine the strength of the company's "Economic Moat" (Network effect, Switching costs, Brand, Tech).
+    3. Evaluate its "Growth Potential" (Is it sustainable?).
+    4. Provide a score from 0 to 100 (where 80+ is a strong buy).
+    5. Provide a one-sentence investment thesis.
     
-    cols = st.columns(4)
-    for i in range(min(4, len(df_top))):
-        row = df_top.iloc[i]
-        cols[i].metric(
-            label=f"#{i+1} {row['Ticker']}",
-            value=f"${row['Current_Price']:.2f}",
-            delta=f"{row['Day_Change_%']:.2f}%"
+    Output strictly in JSON format:
+    {
+        "score": <int>,
+        "moat_rating": "<Wide/Narrow/None>",
+        "reason": "<string>"
+    }
+    """
+    
+    # User Prompt: 提供真實數據
+    user_content = f"""
+    Ticker: {ticker}
+    Sector: {financial_data.get('sector', 'N/A')}
+    Business Summary: {business_summary}
+    
+    Key Metrics:
+    - Revenue Growth: {financial_data.get('revenueGrowth', 0) * 100:.2f}%
+    - Gross Margins: {financial_data.get('grossMargins', 0) * 100:.2f}%
+    - Profit Margins: {financial_data.get('profitMargins', 0) * 100:.2f}%
+    - Free Cash Flow: {financial_data.get('freeCashflow', 'N/A')}
+    """
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4-turbo-preview", # 或 gpt-3.5-turbo (較便宜)
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content}
+            ],
+            response_format={"type": "json_object"}, # 強制回傳 JSON
+            temperature=0.7
         )
+        
+        result = json.loads(response.choices[0].message.content)
+        return result
+    except Exception as e:
+        st.error(f"AI 分析失敗: {e}")
+        return {"score": 0, "moat_rating": "Error", "reason": "AI Analysis Failed"}
 
-    col1, col2 = st.columns([2, 3])
+# ---------------------------------------------------------
+# 3. 數據抓取
+# ---------------------------------------------------------
+def fetch_data_and_analyze(tickers, client):
+    results = []
+    progress_bar = st.progress(0)
+    status = st.empty()
     
-    with col1:
-        st.markdown("#### 資金配置")
-        fig = px.pie(df_top, values='Portfolio_Pct', names='Ticker', hole=0.4)
-        fig.update_layout(margin=dict(t=20, b=20, l=20, r=20))
-        st.plotly_chart(fig, use_container_width=True)
+    for i, ticker in enumerate(tickers):
+        status.text(f"正在分析 {ticker} (這需要一點時間讓 AI 思考)...")
         
-    with col2:
-        st.markdown(f"#### 前 {top_n} 大持股詳細")
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            
+            # 1. 準備數據
+            fin_data = {
+                'revenueGrowth': info.get('revenueGrowth', 0),
+                'grossMargins': info.get('grossMargins', 0),
+                'profitMargins': info.get('profitMargins', 0),
+                'freeCashflow': info.get('freeCashflow', 0),
+                'sector': info.get('sector', 'Tech'),
+                'currentPrice': info.get('currentPrice', 0)
+            }
+            summary = info.get('longBusinessSummary', 'No summary available.')
+            
+            # 2. 呼叫 AI
+            ai_result = analyze_stock_with_gpt(client, ticker, fin_data, summary[:1000]) # 限制文字長度省錢
+            
+            # 3. 整合結果
+            results.append({
+                "Ticker": ticker,
+                "Price": fin_data['currentPrice'],
+                "AI_Score": ai_result['score'],
+                "Moat": ai_result['moat_rating'],
+                "Reason": ai_result['reason'],
+                "Revenue_Growth": fin_data['revenueGrowth'] * 100,
+                "Gross_Margin": fin_data['grossMargins'] * 100
+            })
+            
+        except Exception as e:
+            st.warning(f"跳過 {ticker}: {e}")
+            
+        progress_bar.progress((i + 1) / len(tickers))
         
-        def highlight_change(val):
-            if val > 0: return 'color: #2ecc71'
-            elif val < 0: return 'color: #e74c3c'
-            else: return 'color: white'
+    status.empty()
+    return pd.DataFrame(results)
 
-        st.dataframe(
-            df_top[['Ticker', 'Company', 'Portfolio_Pct', 'Current_Price', 'Day_Change_%']]
-            .style.map(highlight_change, subset=['Day_Change_%'])
-            .format({
-                "Current_Price": "${:.2f}", 
-                "Day_Change_%": "{:.2f}%", 
-                "Portfolio_Pct": "{:.2f}%"
-            }),
-            height=450,
-            use_container_width=True
-        )
-else:
-    st.error("系統發生錯誤。")
+# ---------------------------------------------------------
+# 4. 主程式 UI 邏輯
+# ---------------------------------------------------------
+
+if st.button("🚀 啟動 AI 分析引擎"):
+    if not api_key:
+        st.error("請先在左側輸入 OpenAI API Key！")
+    else:
+        # 初始化 OpenAI Client
+        client = OpenAI(api_key=api_key)
+        
+        with st.spinner("AI 正在閱讀財報並進行評分..."):
+            df = fetch_data_and_analyze(tickers_list, client)
+        
+        if not df.empty:
+            # 排序：分數高的在上面
+            df = df.sort_values(by="AI_Score", ascending=False)
+            
+            # --- 顯示區塊 1: 冠軍榜單 ---
+            st.subheader("🏆 AI 精選高潛力股")
+            
+            # 格式化 DataFrame 顯示
+            st.dataframe(
+                df.style.background_gradient(subset=['AI_Score'], cmap='RdYlGn')
+                .format({
+                    "Price": "${:.2f}",
+                    "Revenue_Growth": "{:.2f}%",
+                    "Gross_Margin": "{:.2f}%",
+                    "AI_Score": "{:.0f}"
+                }),
+                column_config={
+                    "Reason": st.column_config.TextColumn("AI 投資觀點", width="medium"),
+                    "Moat": st.column_config.TextColumn("護城河評級", width="small")
+                },
+                use_container_width=True
+            )
+            
+            # --- 顯示區塊 2: 視覺化分析 ---
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                st.subheader("矩陣分析：護城河 vs AI 評分")
+                # X軸: 毛利(硬護城河), Y軸: AI分數(軟實力), 顏色: 成長性
+                fig = px.scatter(
+                    df, 
+                    x="Gross_Margin", 
+                    y="AI_Score", 
+                    size="Revenue_Growth", 
+                    color="Moat",
+                    hover_name="Ticker",
+                    text="Ticker",
+                    title="泡泡越大代表成長越快，越靠右上角越優質",
+                    labels={"Gross_Margin": "毛利率 (獲利能力)", "AI_Score": "AI 綜合評分"}
+                )
+                fig.update_traces(textposition='top center')
+                st.plotly_chart(fig, use_container_width=True)
+                
+            with col2:
+                st.subheader("💰 AI 建議投資組合")
+                # 簡單的權重分配：分數越高，買越多
+                total_score = df['AI_Score'].sum()
+                df['Weight'] = df['AI_Score'] / total_score
+                
+                fig_pie = px.pie(df, values='Weight', names='Ticker', title='建議資金配置')
+                st.plotly_chart(fig_pie, use_container_width=True)
+                
+            # --- 顯示區塊 3: AI 的詳細碎碎念 ---
+            st.markdown("### 📝 AI 分析師詳細報告")
+            for index, row in df.iterrows():
+                with st.expander(f"{row['Ticker']} - 分數: {row['AI_Score']} ({row['Moat']})"):
+                    st.write(f"**投資理由：** {row['Reason']}")
+                    st.write(f"**核心數據：** 營收成長 {row['Revenue_Growth']:.1f}% | 毛利率 {row['Gross_Margin']:.1f}%")
