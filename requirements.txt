@@ -2,4 +2,6 @@ streamlit
 yfinance
 pandas
 openai
-google-generativeai
+lxml
+plotly
+requests
