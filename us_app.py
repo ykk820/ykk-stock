@@ -7,9 +7,9 @@ import openai
 import math
 import google.generativeai as genai
 
-st.set_page_config(page_title="🇺🇸 Moat Hunter (Final Fix)", layout="wide")
-st.title("🇺🇸 Moat Hunter (美股終極修復版)")
-st.markdown("### 策略：巴菲特 (OpenAI) vs 伍德 (Gemini) + 暴力模型偵測")
+st.set_page_config(page_title="🇺🇸 Moat Hunter (Nuclear Fix)", layout="wide")
+st.title("🇺🇸 Moat Hunter (美股核彈修復版)")
+st.markdown("### 策略：巴菲特 (OpenAI) vs 伍德 (Gemini) + 連環撞庫")
 
 # --- 1. 美股行事曆 ---
 CALENDAR_DATA = {
@@ -97,53 +97,47 @@ def ask_openai(api_key, macro, fomc, df_s):
         return res.choices[0].message.content
     except Exception as e: return f"OpenAI 罷工: {str(e)}"
 
-# --- 🧠 AI 大腦區 (Gemini - 伍德 - 暴力窮舉版) ---
+# --- 🧠 AI 大腦區 (Gemini - 核彈連環撞庫版) ---
 def ask_gemini(api_key, macro, fomc, df_s):
-    try:
-        genai.configure(api_key=api_key)
-        
-        # 1. 定義白名單 (優先順序: 快 -> 強 -> 穩)
-        candidate_models = [
-            'gemini-1.5-flash',
-            'gemini-1.5-flash-latest',
-            'gemini-1.5-pro',
-            'gemini-1.5-pro-latest',
-            'gemini-1.0-pro',
-            'gemini-pro'
-        ]
-        
-        target_model_name = None
-        
-        # 2. 嘗試從 API 抓取可用清單
-        try:
-            available = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            for candidate in candidate_models:
-                if candidate in available:
-                    target_model_name = candidate
-                    break
-        except:
-            pass 
-            
-        # 3. 最後手段
-        if not target_model_name:
-            target_model_name = 'gemini-pro'
+    # 這裡就是核彈邏輯：依序嘗試所有可能的模型名稱
+    # 只要有一個成功，就直接回傳，如果不成功，就換下一個
+    models_to_try = [
+        'gemini-1.5-flash',       # 首選：最新最快
+        'gemini-1.5-flash-latest',# 備選1
+        'gemini-1.5-pro',         # 備選2：最強
+        'gemini-1.5-pro-latest',  # 備選3
+        'gemini-1.0-pro',         # 備選4：舊版穩定
+        'gemini-pro'              # 備選5：別名 (容易404)
+    ]
 
-        # 4. 建立模型
-        model = genai.GenerativeModel(target_model_name)
-        
-        picks = []
-        if not df_s.empty: picks += df_s.head(3)[['代號','現價','葛拉漢價','評分原因']].to_dict('records')
-        
-        prompt = f"""
-        你是【凱薩琳伍德風格】的成長型投資者。繁體中文。
-        宏觀: 隱含利率 {macro['rate']:.2f}%, 10年債 {macro['tnx']:.2f}%, VIX {macro['vix']:.2f}。
-        精選: {picks}
-        任務: 請用「創新、顛覆性趨勢」的角度分析。不要太在意現在的估值(葛拉漢價)，重點是未來的成長潛力與護城河。鼓勵大膽佈局。
-        """
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e: 
-        return f"Gemini 罷工 ({target_model_name}): {str(e)}"
+    genai.configure(api_key=api_key)
+    
+    picks = []
+    if not df_s.empty: picks += df_s.head(3)[['代號','現價','葛拉漢價','評分原因']].to_dict('records')
+    
+    prompt = f"""
+    你是【凱薩琳伍德風格】的成長型投資者。繁體中文。
+    宏觀: 隱含利率 {macro['rate']:.2f}%, 10年債 {macro['tnx']:.2f}%, VIX {macro['vix']:.2f}。
+    精選: {picks}
+    任務: 請用「創新、顛覆性趨勢」的角度分析。不要太在意現在的估值(葛拉漢價)，重點是未來的成長潛力與護城河。鼓勵大膽佈局。
+    """
+
+    last_error = ""
+    
+    # 開始撞庫
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            # 成功了！直接回傳，並標註是用哪個模型成功的
+            return f"✨ (使用模型: {model_name})\n\n{response.text}"
+        except Exception as e:
+            # 失敗了，紀錄錯誤，然後繼續下一個迴圈
+            last_error = str(e)
+            continue
+            
+    # 如果全部都試完了還是失敗
+    return f"Gemini 全面罷工。最後錯誤: {last_error}。\n請檢查 API Key 是否有開通 Google AI Studio 權限。"
 
 # --- 評分 ---
 def score_us_stock(rsi, peg, pe, roe, de, fcf, change, margin, macro):
@@ -224,7 +218,7 @@ if st.button('🚀 雙引擎掃描美股'):
     
     # 平行處理
     if openai_key or gemini_key:
-        with st.spinner("🤖 雙 AI 正在辯論中 (自動選擇模型)..."):
+        with st.spinner("🤖 雙 AI 正在辯論中 (暴力嘗試模型)..."):
             if openai_key: st.session_state.ai_response_us_openai = ask_openai(openai_key, mac, (fomc, days), ds)
             if gemini_key: st.session_state.ai_response_us_gemini = ask_gemini(gemini_key, mac, (fomc, days), ds)
 
@@ -258,3 +252,4 @@ if st.button('🚀 雙引擎掃描美股'):
         if not de.empty: 
             st.dataframe(de.sort_values(by="分數", ascending=False).style.map(highlight_score, subset=['分數']))
         else: st.warning("無ETF數據")
+        
