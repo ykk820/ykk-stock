@@ -5,10 +5,11 @@ import time
 import openai
 import math
 
-st.set_page_config(page_title="🇹🇼 Moat Hunter (TW)", layout="wide")
-st.title("🇹🇼 Moat Hunter (台股特戰版)")
-st.markdown("### 策略：殖利率 + 匯率外資 + 葛拉漢")
+st.set_page_config(page_title="🇹🇼 Moat Hunter (TW Smart)", layout="wide")
+st.title("🇹🇼 Moat Hunter (台股防呆版)")
+st.markdown("### 策略：自動校正代號 + 殖利率 + 外資動向")
 
+# 預設清單 (確保格式正確)
 TREND_THEMES = {
     "🔥 自選監控": [], 
     "🏆 權值股": {"logic": "台積/聯發科/鴻海", "tickers": ['2330.TW', '2454.TW', '2317.TW']},
@@ -24,12 +25,21 @@ st.sidebar.header("🇹🇼 設定")
 api_key = st.sidebar.text_input("OpenAI API Key:", type="password")
 selected_theme = st.sidebar.selectbox("板塊:", list(TREND_THEMES.keys()))
 
+# --- 智慧代號處理 (Smart Ticker) ---
 target_tickers = []
 if selected_theme == "🔥 自選監控":
-    st.sidebar.caption("代號需加 .TW (上市) 或 .TWO (上櫃)")
-    new = st.sidebar.text_input("➕ 代號:").upper()
-    if st.sidebar.button("新增") and new: 
-        if new not in st.session_state.watchlist_tw: st.session_state.watchlist_tw.append(new)
+    st.sidebar.caption("💡 輸入純數字也可以 (例如 2330)，系統會自動加 .TW")
+    new = st.sidebar.text_input("➕ 新增代號:").upper().strip()
+    
+    if st.sidebar.button("新增") and new:
+        # 自動防呆：如果是純數字，自動加 .TW
+        if new.isdigit():
+            new = f"{new}.TW"
+            st.sidebar.success(f"已自動修正為: {new}")
+            
+        if new not in st.session_state.watchlist_tw: 
+            st.session_state.watchlist_tw.append(new)
+            
     if st.session_state.watchlist_tw:
         rm = st.sidebar.selectbox("移除:", ["(選)"]+st.session_state.watchlist_tw)
         if rm != "(選)" and st.sidebar.button("刪除"): st.session_state.watchlist_tw.remove(rm); st.rerun()
@@ -37,10 +47,12 @@ if selected_theme == "🔥 自選監控":
 else:
     target_tickers = TREND_THEMES[selected_theme]["tickers"]
 
+# --- 數據函式 ---
 @st.cache_data(ttl=300)
 def get_tw_macro():
     try:
         twd = yf.Ticker("TWD=X").history(period="5d")
+        if twd.empty: return {"twd": 32.0, "twd_chg": 0, "sox": 0}
         rate = twd['Close'].iloc[-1]
         chg = ((rate - twd['Close'].iloc[-2])/twd['Close'].iloc[-2])*100
         sox = yf.Ticker("^SOX").history(period="5d")
@@ -63,7 +75,7 @@ def ask_ai(api_key, macro, df_s, df_e):
     擔任台股操盤手。繁體中文。
     宏觀: USD/TWD {macro['twd']:.2f} (變動{macro['twd_chg']:.2f}%), 費半 {macro['sox']:.2f}%。
     精選: {picks}
-    任務: 1.外資動向(匯率) 2.操作建議(存股/波段) 3.風險。
+    任務: 1.外資動向 2.操作建議 3.風險。
     """
     try:
         res = client.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role":"user","content":prompt}])
@@ -95,14 +107,34 @@ def get_data(tickers):
     mac = get_tw_macro()
     sl, el = [], []
     bar = st.progress(0)
+    
+    status_text = st.empty() # 狀態顯示區
+    
     for i, t in enumerate(tickers):
+        status_text.text(f"正在分析: {t} ...")
         try:
             s = yf.Ticker(t)
             h = s.history(period="6mo")
-            if len(h)>60:
+            
+            # 如果抓不到資料 (Empty DataFrame)
+            if h.empty:
+                st.toast(f"⚠️ 找不到 {t} 的資料，請確認代號。", icon="❌")
+                continue
+
+            if len(h)>10: # 確保有足夠數據
                 cur = h['Close'].iloc[-1]
-                chg = ((cur-h['Close'].iloc[-2])/h['Close'].iloc[-2])*100
-                rsi = 100 - (100/(1 + (h['Close'].diff().where(lambda x: x>0,0).rolling(14).mean()/(-h['Close'].diff().where(lambda x: x<0,0).rolling(14).mean())).iloc[-1]))
+                # 防止除以零
+                prev = h['Close'].iloc[-2] if h['Close'].iloc[-2] != 0 else cur
+                chg = ((cur-prev)/prev)*100
+                
+                # RSI 計算
+                delta = h['Close'].diff()
+                gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+                loss = loss.replace(0, 0.001) # 防止除以零
+                rs = gain / loss
+                rsi = 100 - (100/(1 + rs)).iloc[-1]
+                
                 info = s.info
                 is_etf = t.startswith("00")
                 yld = (info.get('trailingAnnualDividendRate',0)/cur)*100 if cur>0 else 0
@@ -117,10 +149,15 @@ def get_data(tickers):
                     pe=info.get('trailingPE',0); roe=(info.get('returnOnEquity',0) or 0)*100
                     sc, re = score_tw_stock(rsi, pe, yld, roe, chg, m, mac)
                     sl.append({"代號":t.replace(".TW",""), "現價":f"{cur:.1f}", "葛拉漢":f"{g:.1f}" if g>0 else "-", "殖利率":f"{yld:.1f}%", "分數":int(sc), "原因":re})
-        except: pass
+        except Exception as e: 
+            st.toast(f"{t} 發生錯誤: {e}", icon="⚠️")
+        
         bar.progress((i+1)/len(tickers))
+    
+    status_text.text("分析完成！")
     return pd.DataFrame(sl), pd.DataFrame(el), mac
 
+# --- UI ---
 c1,c2,c3 = st.columns(3)
 if st.button('🚀 掃描台股'):
     ds, de, mac = get_data(target_tickers)
@@ -136,6 +173,8 @@ if st.button('🚀 掃描台股'):
     with cl:
         st.subheader("🏢 個股"); 
         if not ds.empty: st.dataframe(ds.sort_values("分數",0).style.map(hi, subset=['分數']))
+        else: st.warning("個股無數據 (請檢查代號是否正確)")
     with cr:
         st.subheader("📊 ETF"); 
         if not de.empty: st.dataframe(de.sort_values("分數",0).style.map(hi, subset=['分數']))
+        else: st.warning("ETF 無數據")
