@@ -5,10 +5,11 @@ import time
 from datetime import datetime
 import openai
 import math
+import google.generativeai as genai
 
-st.set_page_config(page_title="🇺🇸 Moat Hunter (US Fix)", layout="wide")
-st.title("🇺🇸 Moat Hunter (美股修正版)")
-st.markdown("### 策略：升降息預測 (ZQ=F) + 葛拉漢估值 + AI")
+st.set_page_config(page_title="🇺🇸 Moat Hunter (Dual AI)", layout="wide")
+st.title("🇺🇸 Moat Hunter (雙 AI 辯論版)")
+st.markdown("### 策略：OpenAI (巴菲特) vs Gemini (伍德) + 葛拉漢估值")
 
 # --- 1. 美股行事曆 ---
 CALENDAR_DATA = {
@@ -29,11 +30,15 @@ TREND_THEMES = {
 KNOWN_ETFS = ['VOO', 'QQQ', 'SPY', 'TLT', 'SMH', 'SOXX', 'XLK', 'SCHD']
 
 if 'watchlist_us' not in st.session_state: st.session_state.watchlist_us = ['VOO', 'NVDA'] 
-if 'ai_response_us' not in st.session_state: st.session_state.ai_response_us = None
+if 'ai_response_us_openai' not in st.session_state: st.session_state.ai_response_us_openai = None
+if 'ai_response_us_gemini' not in st.session_state: st.session_state.ai_response_us_gemini = None
 
-# --- 側邊欄 ---
-st.sidebar.header("🇺🇸 設定")
-api_key = st.sidebar.text_input("OpenAI API Key:", type="password")
+# --- 側邊欄：雙引擎設定 ---
+st.sidebar.header("🚀 雙引擎設定")
+openai_key = st.sidebar.text_input("OpenAI Key (sk-...):", type="password")
+gemini_key = st.sidebar.text_input("Gemini Key (AIza...):", type="password")
+
+st.sidebar.markdown("---")
 selected_theme = st.sidebar.selectbox("板塊:", list(TREND_THEMES.keys()))
 
 target_tickers = []
@@ -75,21 +80,41 @@ def calc_graham(info):
         return math.sqrt(22.5 * eps * bvps) if eps > 0 and bvps > 0 else 0
     except: return 0
 
-def ask_ai(api_key, macro, fomc, df_s, df_e):
-    client = openai.OpenAI(api_key=api_key)
-    picks = []
-    # 修正點：統一欄位名稱為 "評分原因"
-    if not df_s.empty: picks += df_s.head(3)[['代號','現價','葛拉漢價','評分原因']].to_dict('records')
-    prompt = f"""
-    擔任華爾街策略師。繁體中文。
-    宏觀: 隱含利率 {macro['rate']:.2f}%, 10年債 {macro['tnx']:.2f}%, VIX {macro['vix']:.2f}, FOMC剩 {fomc[1]} 天。
-    精選: {picks}
-    任務: 1.利率解讀 2.價值分析(安全邊際) 3.操作建議。
-    """
+# --- 🧠 AI 大腦區 ---
+
+def ask_openai(api_key, macro, fomc, df_s):
     try:
+        client = openai.OpenAI(api_key=api_key)
+        picks = []
+        if not df_s.empty: picks += df_s.head(3)[['代號','現價','葛拉漢價','評分原因']].to_dict('records')
+        
+        prompt = f"""
+        你是【巴菲特風格】的價值投資者。繁體中文。
+        宏觀: 隱含利率 {macro['rate']:.2f}%, 10年債 {macro['tnx']:.2f}%, VIX {macro['vix']:.2f}, FOMC剩 {fomc[1]} 天。
+        精選: {picks}
+        任務: 請用「保守、安全邊際」的角度分析。如果葛拉漢價低於現價，請嚴厲警告風險。重點放在不想虧錢。
+        """
         res = client.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role":"user","content":prompt}])
         return res.choices[0].message.content
-    except Exception as e: return f"AI 分析失敗: {str(e)}"
+    except Exception as e: return f"OpenAI 罷工: {str(e)}"
+
+def ask_gemini(api_key, macro, fomc, df_s):
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        picks = []
+        if not df_s.empty: picks += df_s.head(3)[['代號','現價','葛拉漢價','評分原因']].to_dict('records')
+        
+        prompt = f"""
+        你是【凱薩琳伍德風格】的成長型投資者。繁體中文。
+        宏觀: 隱含利率 {macro['rate']:.2f}%, 10年債 {macro['tnx']:.2f}%, VIX {macro['vix']:.2f}。
+        精選: {picks}
+        任務: 請用「創新、顛覆性趨勢」的角度分析。不要太在意現在的估值，重點是未來的成長潛力與護城河。鼓勵大膽佈局。
+        """
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e: return f"Gemini 罷工: {str(e)}"
 
 # --- 評分 ---
 def score_us_stock(rsi, peg, pe, roe, de, fcf, change, margin, macro):
@@ -146,14 +171,12 @@ def get_data(tickers):
                 if is_etf:
                     dd = ((cur-h['Close'].max())/h['Close'].max())*100
                     sc, re = score_us_etf(rsi, dd, macro)
-                    # 修正：欄位統一為 "評分原因"
                     el.append({"代號":t, "現價":f"{cur:.2f}", "分數":int(sc), "回檔":f"{dd:.1f}%", "評分原因":re})
                 else:
                     g = calc_graham(info)
                     m = ((g-cur)/cur)*100 if g>0 else 0
                     peg=info.get('pegRatio',0); roe=info.get('returnOnEquity',0); de=info.get('debtToEquity',0); fcf=info.get('freeCashflow',0)
                     sc, re = score_us_stock(rsi, peg, info.get('trailingPE',0), (roe or 0)*100, (de or 0)/100, fcf or 0, chg, m, macro)
-                    # 修正：欄位統一為 "評分原因"
                     sl.append({"代號":t, "現價":f"{cur:.2f}", "葛拉漢價":f"{g:.2f}" if g>0 else "-", "邊際":f"{m:.1f}%", "分數":int(sc), "評分原因":re})
         except: pass
         bar.progress((i+1)/len(tickers))
@@ -164,34 +187,45 @@ def get_data(tickers):
 # --- UI ---
 fomc, days = get_fomc()
 c1,c2,c3 = st.columns(3)
-if st.button('🚀 掃描美股'):
+if st.button('🚀 雙引擎掃描美股'):
     ds, de, mac = get_data(target_tickers)
     c1.metric("隱含利率", f"{mac['rate']:.2f}%")
     c2.metric("VIX", f"{mac['vix']:.2f}")
     c3.metric("FOMC", f"剩 {days} 天")
     
-    if api_key:
-        with st.spinner("AI 分析中..."): st.session_state.ai_response_us = ask_ai(api_key, mac, (fomc, days), ds, de)
-    if st.session_state.ai_response_us: st.info(st.session_state.ai_response_us)
+    # 平行處理
+    if openai_key or gemini_key:
+        with st.spinner("🤖 雙 AI 正在辯論中..."):
+            if openai_key: st.session_state.ai_response_us_openai = ask_openai(openai_key, mac, (fomc, days), ds)
+            if gemini_key: st.session_state.ai_response_us_gemini = ask_gemini(gemini_key, mac, (fomc, days), ds)
+
+    # 辯論面板
+    if st.session_state.ai_response_us_openai or st.session_state.ai_response_us_gemini:
+        st.write("### 🤖 投資觀點對決")
+        tab1, tab2 = st.tabs(["🧐 OpenAI (巴菲特)", "✨ Gemini (伍德)"])
+        
+        with tab1:
+            if st.session_state.ai_response_us_openai: st.info(st.session_state.ai_response_us_openai)
+            else: st.warning("未輸入 OpenAI Key")
+        
+        with tab2:
+            if st.session_state.ai_response_us_gemini: st.success(st.session_state.ai_response_us_gemini)
+            else: st.warning("未輸入 Gemini Key")
     
     # 高對比樣式
     def highlight_score(val):
-        if val >= 80:
-            return 'background-color: #1b5e20; color: white; font-weight: bold;'
-        elif val >= 60:
-            return 'background-color: #c8e6c9; color: black;'
+        if val >= 80: return 'background-color: #1b5e20; color: white; font-weight: bold;'
+        elif val >= 60: return 'background-color: #c8e6c9; color: black;'
         return ''
     
     cl, cr = st.columns(2)
     with cl:
-        st.subheader("🏢 價值股"); 
+        st.subheader("🏢 價值股")
         if not ds.empty: 
-            # 修正排序語法
             st.dataframe(ds.sort_values(by="分數", ascending=False).style.map(highlight_score, subset=['分數']))
         else: st.warning("無個股數據")
     with cr:
-        st.subheader("📊 ETF"); 
+        st.subheader("📊 ETF")
         if not de.empty: 
-            # 修正排序語法
             st.dataframe(de.sort_values(by="分數", ascending=False).style.map(highlight_score, subset=['分數']))
         else: st.warning("無ETF數據")
