@@ -14,33 +14,47 @@ st.markdown("---")
 # ---------------------------------------------------------
 # 1. 爬蟲函數：抓取波克夏最新持股
 # ---------------------------------------------------------
-@st.cache_data(ttl=24*3600)  # 設定快取，避免每次重新整理都去爬網站
+# ---------------------------------------------------------
+# 1. 爬蟲函數：抓取波克夏最新持股 (修正版)
+# ---------------------------------------------------------
+@st.cache_data(ttl=24*3600)
 def get_buffett_portfolio():
     url = "https://www.dataroma.com/m/holdings.php?m=BRK"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "User-Agent": "Mozilla/5.0"
     }
     
     try:
         response = requests.get(url, headers=headers)
-        # 利用 Pandas 直接讀取網頁中的表格
         dfs = pd.read_html(response.text)
-        # Dataroma 的持股表格通常是列表中的第一個
         df = dfs[0]
         
-        # 清理資料：只留我們需要的欄位
-        # 欄位名稱可能會變，這裡針對 Dataroma 的結構做處理
-        df = df[['Stock', 'Symbol', '% ofPortfolio', 'Share Count', 'ReportedPrice']]
-        df.columns = ['Company', 'Ticker', 'Portfolio_Pct', 'Shares', 'Cost_Price']
+        # --- 🔧 除錯專用：如果又報錯，這一行會顯示抓到了什麼欄位 ---
+        # st.write("抓到的欄位名稱:", df.columns.tolist())
         
-        # 轉換數值格式 (去除 % 和 $ 符號)
-        df['Portfolio_Pct'] = df['Portfolio_Pct'].astype(str).str.replace('%', '').astype(float)
+        # --- 修正點：改用 iloc (位置) 來選欄位，比較不會因為字串有空白而報錯 ---
+        # 通常 Dataroma 的順序是：Stock(0), Symbol(1), % of Portfolio(2), Share Count(3), % Change(4), Reported Price(5)...
+        # 我們只取我們需要的欄位
         
-        return df
+        # 建立一個新的乾淨 DataFrame
+        clean_df = pd.DataFrame()
+        clean_df['Company'] = df.iloc[:, 0]       # 第 1 欄：公司名稱
+        clean_df['Ticker'] = df.iloc[:, 1]        # 第 2 欄：股票代號
+        clean_df['Portfolio_Pct'] = df.iloc[:, 2] # 第 3 欄：佔比
+        clean_df['Shares'] = df.iloc[:, 3]        # 第 4 欄：股數
+        clean_df['Cost_Price'] = df.iloc[:, 5]    # 第 6 欄：原本的價格 (Reported Price)
+        
+        # 資料清理
+        # 把佔比的 % 符號拿掉，轉成數字
+        clean_df['Portfolio_Pct'] = clean_df['Portfolio_Pct'].astype(str).str.replace('%', '', regex=False)
+        clean_df['Portfolio_Pct'] = pd.to_numeric(clean_df['Portfolio_Pct'], errors='coerce')
+        
+        return clean_df
+
     except Exception as e:
         st.error(f"抓取數據失敗: {e}")
+        # 如果失敗，回傳空的 DataFrame 防止程式崩潰
         return pd.DataFrame()
-
 # ---------------------------------------------------------
 # 2. 股價函數：取得即時價格與漲跌
 # ---------------------------------------------------------
