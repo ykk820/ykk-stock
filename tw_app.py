@@ -6,9 +6,9 @@ import math
 import openai
 import google.generativeai as genai
 
-st.set_page_config(page_title="🇹🇼 Moat Hunter (Dual AI)", layout="wide")
-st.title("🇹🇼 Moat Hunter (雙 AI 辯論版)")
-st.markdown("### 策略：OpenAI vs Gemini 交叉比對 + 產業護城河")
+st.set_page_config(page_title="🇹🇼 Moat Hunter (Final Fix)", layout="wide")
+st.title("🇹🇼 Moat Hunter (台股終極修復版)")
+st.markdown("### 策略：OpenAI (保守) vs Gemini (成長) + 自動偵測模型")
 
 # --- 1. 產業鏈清單 ---
 TREND_THEMES = {
@@ -20,8 +20,8 @@ TREND_THEMES = {
 }
 
 if 'watchlist_tw' not in st.session_state: st.session_state.watchlist_tw = ['2330.TW', '2317.TW'] 
-if 'ai_response_openai' not in st.session_state: st.session_state.ai_response_openai = None
-if 'ai_response_gemini' not in st.session_state: st.session_state.ai_response_gemini = None
+if 'ai_response_tw_openai' not in st.session_state: st.session_state.ai_response_tw_openai = None
+if 'ai_response_tw_gemini' not in st.session_state: st.session_state.ai_response_tw_gemini = None
 
 # --- 側邊欄：雙引擎設定 ---
 st.sidebar.header("🚀 雙引擎設定")
@@ -65,43 +65,75 @@ def calc_graham(info):
         return math.sqrt(22.5 * eps * bvps) if eps > 0 and bvps > 0 else 0
     except: return 0
 
-# --- 🧠 AI 大腦區 ---
-
+# --- 🧠 AI 大腦區 (OpenAI) ---
 def ask_openai(api_key, macro, df_s):
     try:
         client = openai.OpenAI(api_key=api_key)
         picks = []
         if not df_s.empty: picks += df_s.head(3)[['代號','現價','毛利率','評分原因']].to_dict('records')
         prompt = f"""
-        你是【保守穩健派】的華爾街分析師（類似巴菲特）。繁體中文。
-        宏觀: USD/TWD {macro['twd']:.2f}, 費半 {macro['sox']:.2f}%。
+        你是【保守派的外資分析師】。繁體中文。
+        宏觀: USD/TWD {macro['twd']:.2f} (變動 {macro['twd_chg']:.2f}%), 費半 {macro['sox']:.2f}%。
         精選: {picks}
-        任務: 請用「嚴格、懷疑」的角度分析這些股票。重點放在風險、估值是否過高？如果沒問題才建議買進。
+        任務: 請用「嚴格、避險」的角度分析。
+        1. 匯率風險：台幣貶值是否影響資金撤離？
+        2. 估值風險：這些股票是否過熱？毛利是否能支撐股價？
         """
         res = client.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role":"user","content":prompt}])
         return res.choices[0].message.content
     except Exception as e: return f"OpenAI 罷工: {str(e)}"
 
+# --- 🧠 AI 大腦區 (Gemini 暴力窮舉版) ---
 def ask_gemini(api_key, macro, df_s):
     try:
-        # 設定 API
         genai.configure(api_key=api_key)
         
-        # ⚠️ 這裡修改了：改用 'gemini-pro'，這是最穩定的版本，舊版套件也能跑
-        model = genai.GenerativeModel('gemini-pro')
+        # 1. 定義白名單 (優先順序)
+        candidate_models = [
+            'gemini-1.5-flash',
+            'gemini-1.5-flash-latest',
+            'gemini-1.5-pro',
+            'gemini-1.5-pro-latest',
+            'gemini-1.0-pro',
+            'gemini-pro'
+        ]
+        
+        target_model_name = None
+        
+        # 2. 嘗試從 API 抓取可用清單
+        try:
+            available = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            # 比對白名單
+            for candidate in candidate_models:
+                if candidate in available:
+                    target_model_name = candidate
+                    break
+        except:
+            pass # 如果 list_models 失敗，就直接往下盲測
+            
+        # 3. 如果還是沒找到，就用最通用的 'gemini-pro' 當最後手段
+        if not target_model_name:
+            target_model_name = 'gemini-pro'
+
+        # 4. 建立模型
+        model = genai.GenerativeModel(target_model_name)
         
         picks = []
         if not df_s.empty: picks += df_s.head(3)[['代號','現價','毛利率','評分原因']].to_dict('records')
         
         prompt = f"""
-        你是【積極成長派】的矽谷投資人（類似凱薩琳伍德）。繁體中文。
+        你是【積極派的產業研究員】。繁體中文。
         宏觀: USD/TWD {macro['twd']:.2f}, 費半 {macro['sox']:.2f}%。
         精選: {picks}
-        任務: 請用「趨勢、未來」的角度分析這些股票。重點放在產業護城河、未來成長爆發力。鼓勵抓住機會。
+        任務: 請用「產業趨勢、技術護城河」的角度分析。
+        1. 競爭優勢：毛利率是否顯示具備定價權？
+        2. 未來展望：在 AI 或半導體供應鏈中是否不可或缺？
+        鼓勵抓住長期成長機會。
         """
         response = model.generate_content(prompt)
         return response.text
-    except Exception as e: return f"Gemini 罷工: {str(e)}"
+    except Exception as e: 
+        return f"Gemini 罷工 ({target_model_name}): {str(e)}"
 
 # --- 評分邏輯 ---
 def score_industry_stock(rsi, pe, margin, roe, change, safety_margin, macro):
@@ -110,6 +142,7 @@ def score_industry_stock(rsi, pe, margin, roe, change, safety_margin, macro):
     elif margin > 30: score += 15; det.append("💎高毛利")
     elif margin < 10: score -= 10; det.append("🔨毛利低")
     if roe > 20: score += 15; det.append("👑ROE頂級")
+    elif roe > 15: score += 10; det.append("✅ROE優")
     if macro['twd_chg'] > 0.2: score -= 5; det.append("⚠️匯率貶")
     if macro['sox'] > 1.5: score += 10; det.append("🚀費半攻")
     if safety_margin > 10: score += 10; det.append("💰低估")
@@ -126,7 +159,7 @@ def get_data(tickers):
     status = st.empty()
     
     for i, t in enumerate(tickers):
-        status.text(f"分析中: {t}")
+        status.text(f"掃描護城河: {t}")
         try:
             s = yf.Ticker(t)
             h = s.history(period="6mo")
@@ -159,26 +192,26 @@ def get_data(tickers):
 c1,c2,c3 = st.columns(3)
 if st.button('🚀 雙引擎啟動'):
     ds, mac = get_data(target_tickers)
-    c1.metric("USD/TWD", f"{mac['twd']:.2f}", f"{mac['twd_chg']:.2f}%", delta_color="inverse")
-    c2.metric("費半指數", f"{mac['sox']:.2f}%")
+    c1.metric("USD/TWD (外資)", f"{mac['twd']:.2f}", f"{mac['twd_chg']:.2f}%", delta_color="inverse")
+    c2.metric("費半指數 (科技)", f"{mac['sox']:.2f}%")
     
     # 平行處理
     if openai_key or gemini_key:
-        with st.spinner("🤖 雙 AI 正在辯論中..."):
-            if openai_key: st.session_state.ai_response_openai = ask_openai(openai_key, mac, ds)
-            if gemini_key: st.session_state.ai_response_gemini = ask_gemini(gemini_key, mac, ds)
+        with st.spinner("🤖 雙 AI 正在辯論中 (模型掃描)..."):
+            if openai_key: st.session_state.ai_response_tw_openai = ask_openai(openai_key, mac, ds)
+            if gemini_key: st.session_state.ai_response_tw_gemini = ask_gemini(gemini_key, mac, ds)
 
     # 顯示辯論結果
-    if st.session_state.ai_response_openai or st.session_state.ai_response_gemini:
+    if st.session_state.ai_response_tw_openai or st.session_state.ai_response_tw_gemini:
         st.write("### 🤖 投資觀點對決")
-        tab1, tab2 = st.tabs(["🧐 OpenAI (保守派)", "✨ Gemini (成長派)"])
+        tab1, tab2 = st.tabs(["🧐 OpenAI (保守外資)", "✨ Gemini (產業成長)"])
         
         with tab1:
-            if st.session_state.ai_response_openai: st.info(st.session_state.ai_response_openai)
+            if st.session_state.ai_response_tw_openai: st.info(st.session_state.ai_response_tw_openai)
             else: st.warning("未輸入 OpenAI Key")
         
         with tab2:
-            if st.session_state.ai_response_gemini: st.success(st.session_state.ai_response_gemini)
+            if st.session_state.ai_response_tw_gemini: st.success(st.session_state.ai_response_tw_gemini)
             else: st.warning("未輸入 Gemini Key")
 
     def highlight_score(val):
@@ -186,8 +219,7 @@ if st.button('🚀 雙引擎啟動'):
         elif val >= 60: return 'background-color: #c8e6c9; color: black;'
         return ''
     
-    st.subheader("🏭 產業龍頭數據")
+    st.subheader("🏭 產業龍頭 (毛利率為王)")
     if not ds.empty: 
         st.dataframe(ds.sort_values(by="分數", ascending=False).style.map(highlight_score, subset=['分數']))
     else: st.warning("無數據")
-    
