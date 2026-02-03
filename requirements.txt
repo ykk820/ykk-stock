@@ -7,3 +7,4 @@ plotly
 requests
 html5lib
 beautifulsoup4
+plotly
