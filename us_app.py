@@ -5,32 +5,37 @@ from datetime import datetime
 import openai
 import math
 
-st.set_page_config(page_title="🇺🇸 Moat Hunter (Fixed)", layout="wide")
-st.title("🇺🇸 Moat Hunter (美股結構版)")
-st.markdown("### 策略：供應鏈地位 + 護城河優勢 + 剛性需求")
+st.set_page_config(page_title="🇺🇸 Moat Hunter (Strategic)", layout="wide")
+st.title("🇺🇸 Moat Hunter (2026 戰略佈局版)")
+st.markdown("### 策略：PLTR 商業大腦 + GOOGL 價值回歸 + IPO 埋伏")
 
-# --- 設定與清單 ---
-CALENDAR_DATA = {
-    "FOMC": [{"date": "2026-03-18"}, {"date": "2026-04-29"}, {"date": "2026-06-17"}]
-}
+# --- 1. 戰略日曆 (使用者指定 + FOMC) ---
+# Anduril 因為還沒上市，無法抓股價，所以放在這裡做文字提醒
+STRATEGIC_CALENDAR = [
+    {"日期": "2026-02-02", "事件": "📊 PLTR 財報", "重點": "營收年增70%，商業增長137% (已驗證)"},
+    {"日期": "2026-03-18", "事件": "🏛️ FOMC 會議", "重點": "利率決策 + SEP 經濟預測"},
+    {"日期": "2026-04-29", "事件": "🏛️ FOMC 會議", "重點": "常規會議"},
+    {"日期": "2026-06-17", "事件": "🏛️ FOMC 會議", "重點": "年中重點會議"},
+    {"日期": "2026-H2",    "事件": "🦄 Anduril IPO", "重點": "目標估值450億，國防獨角獸 (資金預備)"},
+]
 
+# --- 2. 投資清單 ---
 TREND_THEMES = {
-    "🔥 自選監控": [], 
-    "⛓️ 核心供應鏈": {
-        "logic": "半導體設備與先進製程，AI 的軍火商。",
-        "tickers": ['ASML', 'AMAT', 'LRCX', 'TSM', 'KLAC'] 
+    "🎯 2026 核心戰略": {
+        "logic": "PLTR成長爆發 + GOOGL利空抄底 + 數據二線股",
+        "tickers": ['PLTR', 'GOOGL', 'IOT', 'RXRX']
     },
-    "🏰 寬護城河": {
-        "logic": "擁有定價權的軟體與支付巨頭。",
-        "tickers": ['MSFT', 'GOOGL', 'V', 'MA', 'COST'] 
+    "⛓️ 核心供應鏈": {
+        "logic": "半導體設備 (ASML/AMAT) 與 台積電",
+        "tickers": ['ASML', 'AMAT', 'TSM', 'KLAC'] 
     },
     "🚀 強勁需求": {
-        "logic": "算力、電力、減肥藥，市場供不應求。",
-        "tickers": ['NVDA', 'AVGO', 'VST', 'CEG', 'LLY'] 
+        "logic": "AI 算力 (NVDA) 與 電力 (VST)",
+        "tickers": ['NVDA', 'AVGO', 'VST', 'CEG'] 
     }
 }
 
-if 'watchlist_us' not in st.session_state: st.session_state.watchlist_us = ['NVDA', 'MSFT'] 
+if 'watchlist_us' not in st.session_state: st.session_state.watchlist_us = ['PLTR', 'GOOGL'] 
 if 'ai_response_us_conservative' not in st.session_state: st.session_state.ai_response_us_conservative = None
 if 'ai_response_us_growth' not in st.session_state: st.session_state.ai_response_us_growth = None
 
@@ -44,9 +49,6 @@ if selected_theme == "🔥 自選監控":
     new = st.sidebar.text_input("➕ 代號:").upper().strip()
     if st.sidebar.button("新增") and new: 
         if new not in st.session_state.watchlist_us: st.session_state.watchlist_us.append(new)
-    if st.session_state.watchlist_us:
-        rm = st.sidebar.selectbox("移除:", ["(選)"]+st.session_state.watchlist_us)
-        if rm != "(選)" and st.sidebar.button("刪除"): st.session_state.watchlist_us.remove(rm); st.rerun()
     target_tickers = st.session_state.watchlist_us
 else:
     target_tickers = TREND_THEMES[selected_theme]["tickers"]
@@ -63,26 +65,18 @@ def get_us_macro():
         return {"vix": vix, "tnx": tnx, "rate": rate}
     except: return {"vix": 20, "tnx": 4.0, "rate": 0}
 
-def get_fomc():
-    today = datetime.now().date()
-    for m in CALENDAR_DATA["FOMC"]:
-        d = datetime.strptime(m["date"], "%Y-%m-%d").date()
-        if d >= today: return (d - today).days
-    return 0
-
-def ask_ai(api_key, persona, macro, days, df_s):
+def ask_ai(api_key, persona, macro, df_s):
     try:
         client = openai.OpenAI(api_key=api_key)
         picks = []
-        # 🟢 修正點：這裡改成抓取「毛利率」和「PEG」，不再抓「葛拉漢價」
-        if not df_s.empty: picks += df_s.head(3)[['代號','現價','毛利率','PEG','評分原因']].to_dict('records')
+        if not df_s.empty: picks += df_s.head(5)[['代號','現價','毛利率','PEG','評分原因']].to_dict('records')
         
         if persona == "conservative":
-            sys_msg = "你是巴菲特風格的價值投資者。嚴格看重護城河(毛利率)與安全邊際。"
-            user_msg = f"宏觀: 利率{macro['rate']:.1f}%, VIX {macro['vix']:.1f}, FOMC剩{days}天。分析: {picks}。請分析這些公司的「護城河」是否夠深？PEG是否合理？"
+            sys_msg = "你是巴菲特風格的價值投資者。你關注 GOOGL 的利空是否創造了安全邊際。"
+            user_msg = f"宏觀: 利率{macro['rate']:.1f}%, VIX {macro['vix']:.1f}。分析: {picks}。請特別點評 GOOGL 是否超跌？以及 PLTR 的高估值風險。"
         else:
-            sys_msg = "你是凱薩琳伍德風格的成長型投資者。專注結構性短缺與破壞式創新。"
-            user_msg = f"宏觀: VIX {macro['vix']:.1f}。分析: {picks}。請分析這些公司的「供應鏈地位」或「市場需求」是否強勁？忽略短期波動。"
+            sys_msg = "你是凱薩琳伍德風格的成長型投資者。你對 PLTR 的商業大腦轉型感到興奮。"
+            user_msg = f"宏觀: VIX {macro['vix']:.1f}。分析: {picks}。請分析 PLTR 轉型商業大腦的潛力，以及 Samsara(IOT) 和 Recursion(RXRX) 的數據規模效應。"
 
         res = client.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -93,18 +87,21 @@ def ask_ai(api_key, persona, macro, days, df_s):
 
 def score_us_stock(rsi, peg, margin, roe, change, macro):
     score = 50; det = []
-    # 評分邏輯
-    if margin > 50: score += 20; det.append("🏰強護城河")
-    elif margin > 30: score += 10; det.append("💎高毛利")
     
-    if roe > 20: score += 15; det.append("👑ROE頂級")
+    # 特殊個股邏輯
+    # IOT (Samsara) 和 RXRX 通常虧損，看重營收成長與PEG，不看ROE
     
-    if peg > 0 and peg < 1.2: score += 15; det.append("🚀PEG低估")
-    elif peg > 2.5: score -= 5; det.append("⚠️PEG高")
+    if margin > 60: score += 20; det.append("🏰軟體級護城河") # PLTR/GOOGL 通常很高
+    elif margin > 40: score += 10; det.append("💎高毛利")
+    
+    if roe > 20: score += 15; det.append("👑ROE優")
+    
+    if peg > 0 and peg < 1.5: score += 15; det.append("🚀PEG合理")
+    elif peg > 3: score -= 5; det.append("⚠️高估值")
     
     if macro['vix'] > 30: score += 15; det.append("🩸恐慌買點")
-    if rsi < 30: score += 15; det.append("📉超賣")
-    if change < -2: score += 10; det.append("🔥回檔")
+    if rsi < 35: score += 15; det.append("📉超賣")
+    if change < -3: score += 10; det.append("🔥大跌")
     
     return max(0,min(100,score)), " ".join(det)
 
@@ -117,7 +114,7 @@ def get_data(tickers):
         try:
             s = yf.Ticker(t)
             h = s.history(period="1y")
-            if h.empty or len(h)<200: continue
+            if h.empty: continue
             
             cur = h['Close'].iloc[-1]
             chg = ((cur-h['Close'].iloc[-2])/h['Close'].iloc[-2])*100
@@ -147,22 +144,26 @@ def get_data(tickers):
     return pd.DataFrame(sl), mac
 
 # --- UI ---
-days = get_fomc()
 c1,c2,c3 = st.columns(3)
-if st.button('🚀 掃描結構性機會'):
+if st.button('🚀 掃描 2026 戰略'):
     ds, mac = get_data(target_tickers)
     c1.metric("利率預期", f"{mac['rate']:.2f}%")
     c2.metric("VIX", f"{mac['vix']:.2f}")
-    c3.metric("FOMC", f"剩 {days} 天")
+    c3.metric("美債 10Y", f"{mac['tnx']:.2f}%")
     
+    # 顯示戰略日曆
+    st.markdown("### 🗓️ 關鍵戰略日曆 (Anduril IPO 監控)")
+    cal_df = pd.DataFrame(STRATEGIC_CALENDAR)
+    st.table(cal_df)
+
     if api_key:
-        with st.spinner("🤖 雙人格分析中..."):
-            st.session_state.ai_response_us_conservative = ask_ai(api_key, "conservative", mac, days, ds)
-            st.session_state.ai_response_us_growth = ask_ai(api_key, "growth", mac, days, ds)
+        with st.spinner("🤖 雙人格 (巴菲特 vs 伍德) 分析中..."):
+            st.session_state.ai_response_us_conservative = ask_ai(api_key, "conservative", mac, ds)
+            st.session_state.ai_response_us_growth = ask_ai(api_key, "growth", mac, ds)
     
     if st.session_state.ai_response_us_conservative:
         st.write("### 🤖 觀點對決")
-        t1, t2 = st.tabs(["🧐 巴菲特 (護城河)", "✨ 伍德 (需求&趨勢)"])
+        t1, t2 = st.tabs(["🧐 巴菲特 (價值/GOOGL)", "✨ 伍德 (成長/PLTR)"])
         with t1: st.info(st.session_state.ai_response_us_conservative)
         with t2: st.success(st.session_state.ai_response_us_growth)
 
