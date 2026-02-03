@@ -5,11 +5,11 @@ import time
 import openai
 import math
 
-st.set_page_config(page_title="🇹🇼 Moat Hunter (TW Smart)", layout="wide")
-st.title("🇹🇼 Moat Hunter (台股防呆版)")
+st.set_page_config(page_title="🇹🇼 Moat Hunter (TW Fix)", layout="wide")
+st.title("🇹🇼 Moat Hunter (台股修正版)")
 st.markdown("### 策略：自動校正代號 + 殖利率 + 外資動向")
 
-# 預設清單 (確保格式正確)
+# 預設清單
 TREND_THEMES = {
     "🔥 自選監控": [], 
     "🏆 權值股": {"logic": "台積/聯發科/鴻海", "tickers": ['2330.TW', '2454.TW', '2317.TW']},
@@ -25,14 +25,13 @@ st.sidebar.header("🇹🇼 設定")
 api_key = st.sidebar.text_input("OpenAI API Key:", type="password")
 selected_theme = st.sidebar.selectbox("板塊:", list(TREND_THEMES.keys()))
 
-# --- 智慧代號處理 (Smart Ticker) ---
+# --- 智慧代號處理 ---
 target_tickers = []
 if selected_theme == "🔥 自選監控":
     st.sidebar.caption("💡 輸入純數字也可以 (例如 2330)，系統會自動加 .TW")
     new = st.sidebar.text_input("➕ 新增代號:").upper().strip()
     
     if st.sidebar.button("新增") and new:
-        # 自動防呆：如果是純數字，自動加 .TW
         if new.isdigit():
             new = f"{new}.TW"
             st.sidebar.success(f"已自動修正為: {new}")
@@ -70,7 +69,9 @@ def calc_graham(info):
 def ask_ai(api_key, macro, df_s, df_e):
     client = openai.OpenAI(api_key=api_key)
     picks = []
+    # 修正點：這裡抓取的欄位名稱必須與 get_data 裡存入的一致
     if not df_s.empty: picks += df_s.head(3)[['代號','現價','殖利率','評分原因']].to_dict('records')
+    
     prompt = f"""
     擔任台股操盤手。繁體中文。
     宏觀: USD/TWD {macro['twd']:.2f} (變動{macro['twd_chg']:.2f}%), 費半 {macro['sox']:.2f}%。
@@ -80,7 +81,7 @@ def ask_ai(api_key, macro, df_s, df_e):
     try:
         res = client.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role":"user","content":prompt}])
         return res.choices[0].message.content
-    except: return "AI 休息中"
+    except Exception as e: return f"AI 分析失敗: {str(e)}"
 
 def score_tw_stock(rsi, pe, yld, roe, change, margin, macro):
     score = 50; det = []
@@ -107,31 +108,27 @@ def get_data(tickers):
     mac = get_tw_macro()
     sl, el = [], []
     bar = st.progress(0)
-    
-    status_text = st.empty() # 狀態顯示區
+    status = st.empty()
     
     for i, t in enumerate(tickers):
-        status_text.text(f"正在分析: {t} ...")
+        status.text(f"分析中: {t}")
         try:
             s = yf.Ticker(t)
             h = s.history(period="6mo")
             
-            # 如果抓不到資料 (Empty DataFrame)
             if h.empty:
-                st.toast(f"⚠️ 找不到 {t} 的資料，請確認代號。", icon="❌")
+                st.toast(f"找不到 {t}", icon="⚠️")
                 continue
 
-            if len(h)>10: # 確保有足夠數據
+            if len(h)>10:
                 cur = h['Close'].iloc[-1]
-                # 防止除以零
-                prev = h['Close'].iloc[-2] if h['Close'].iloc[-2] != 0 else cur
+                prev = h['Close'].iloc[-2] if h['Close'].iloc[-2]!=0 else cur
                 chg = ((cur-prev)/prev)*100
                 
-                # RSI 計算
                 delta = h['Close'].diff()
                 gain = (delta.where(delta > 0, 0)).rolling(14).mean()
                 loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-                loss = loss.replace(0, 0.001) # 防止除以零
+                loss = loss.replace(0, 0.001)
                 rs = gain / loss
                 rsi = 100 - (100/(1 + rs)).iloc[-1]
                 
@@ -142,19 +139,19 @@ def get_data(tickers):
                 if is_etf:
                     ma60 = h['Close'].rolling(60).mean().iloc[-1]
                     sc, re = score_tw_etf(rsi, yld, cur, ma60, mac)
-                    el.append({"代號":t.replace(".TW",""), "現價":f"{cur:.1f}", "殖利率":f"{yld:.1f}%", "分數":int(sc), "原因":re})
+                    # 修正：統一欄位名稱為 "評分原因"
+                    el.append({"代號":t.replace(".TW",""), "現價":f"{cur:.1f}", "殖利率":f"{yld:.1f}%", "分數":int(sc), "評分原因":re})
                 else:
                     g = calc_graham(info)
                     m = ((g-cur)/cur)*100 if g>0 else 0
                     pe=info.get('trailingPE',0); roe=(info.get('returnOnEquity',0) or 0)*100
                     sc, re = score_tw_stock(rsi, pe, yld, roe, chg, m, mac)
-                    sl.append({"代號":t.replace(".TW",""), "現價":f"{cur:.1f}", "葛拉漢":f"{g:.1f}" if g>0 else "-", "殖利率":f"{yld:.1f}%", "分數":int(sc), "原因":re})
-        except Exception as e: 
-            st.toast(f"{t} 發生錯誤: {e}", icon="⚠️")
-        
+                    # 修正：統一欄位名稱為 "評分原因"
+                    sl.append({"代號":t.replace(".TW",""), "現價":f"{cur:.1f}", "葛拉漢":f"{g:.1f}" if g>0 else "-", "殖利率":f"{yld:.1f}%", "分數":int(sc), "評分原因":re})
+        except: pass
         bar.progress((i+1)/len(tickers))
     
-    status_text.text("分析完成！")
+    status.empty()
     return pd.DataFrame(sl), pd.DataFrame(el), mac
 
 # --- UI ---
@@ -164,6 +161,7 @@ if st.button('🚀 掃描台股'):
     c1.metric("USD/TWD", f"{mac['twd']:.2f}", f"{mac['twd_chg']:.2f}%", delta_color="inverse")
     c2.metric("費半", f"{mac['sox']:.2f}%")
     
+    # 這裡現在不會報錯了，因為欄位名稱已經統一
     if api_key:
         with st.spinner("AI 分析中..."): st.session_state.ai_response_tw = ask_ai(api_key, mac, ds, de)
     if st.session_state.ai_response_tw: st.info(st.session_state.ai_response_tw)
@@ -173,8 +171,8 @@ if st.button('🚀 掃描台股'):
     with cl:
         st.subheader("🏢 個股"); 
         if not ds.empty: st.dataframe(ds.sort_values("分數",0).style.map(hi, subset=['分數']))
-        else: st.warning("個股無數據 (請檢查代號是否正確)")
+        else: st.warning("無個股數據")
     with cr:
         st.subheader("📊 ETF"); 
         if not de.empty: st.dataframe(de.sort_values("分數",0).style.map(hi, subset=['分數']))
-        else: st.warning("ETF 無數據")
+        else: st.warning("無ETF數據")
