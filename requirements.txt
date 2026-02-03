@@ -8,3 +8,4 @@ requests
 html5lib
 beautifulsoup4
 openpyxl
+cloudscraper
